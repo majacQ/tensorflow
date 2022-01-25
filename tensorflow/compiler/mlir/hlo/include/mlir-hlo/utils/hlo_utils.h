@@ -24,7 +24,6 @@ limitations under the License.
 
 namespace mlir {
 namespace hlo {
-
 // Computes the broadcast dimensions attr for an elementwise binary operator
 // between two ranked tensors.
 // If `allow_empty` is true, then null can be returned to mean that the
@@ -71,7 +70,7 @@ DenseElementsAttr GetScalarOfType(Type ty, int64_t raw_value);
 // Enum type used to specify scalar argument to GetScalarLimitOfType.
 enum ScalarLimit {
   kLowest,          // The scalar corresponding to numeric_limits<T>::lowest.
-  kInfinityLowest,  // Like kMax, but returns -infinity where available.
+  kInfinityLowest,  // Like kLowest, but returns -infinity where available.
   kMax,             // The scalar corresponding to numeric_limits<T>::max.
   kInfinityMax,     // Like kMax, but returns infinity where available.
 };
@@ -89,7 +88,13 @@ std::string LmhloToMhloOpName(llvm::StringRef op_name,
                               mlir::MLIRContext* context);
 
 // Return true if Attr has values [0, 1, ...].
-bool IsSequenceStartingWith0(DenseIntElementsAttr attr);
+bool IsSequenceStartingWith0(Attribute attr);
+
+// Returns the argument index for the giving FuncOp and its operand value.
+int64_t getArgumentIndex(mlir::FuncOp op, Value value);
+
+/// Computes the memory usage of the given allocations.
+std::pair<size_t, size_t> computeMemory(const std::vector<Value>& allocs);
 
 }  // namespace hlo
 }  // namespace mlir

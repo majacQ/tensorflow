@@ -33,10 +33,10 @@ using xla::llvm_ir::IrArray;
 namespace xla {
 namespace cpu {
 
-StatusOr<llvm::Value*> CpuElementalIrEmitter::EmitAtan2(PrimitiveType prim_type,
-                                                        llvm::Value* lhs,
-                                                        llvm::Value* rhs) {
-  string function_name;
+StatusOr<llvm::Value*> CpuElementalIrEmitter::EmitAtan2(
+    PrimitiveType prim_type, llvm::Value* lhs, llvm::Value* rhs,
+    absl::string_view /*name*/) {
+  std::string function_name;
   bool cast_result_to_fp16 = false;
   switch (prim_type) {
     case F16:
@@ -73,7 +73,7 @@ StatusOr<llvm::Value*> CpuElementalIrEmitter::EmitAtan2(PrimitiveType prim_type,
 StatusOr<llvm::Value*> CpuElementalIrEmitter::EmitTanh(PrimitiveType prim_type,
                                                        llvm::Value* value) {
   bool cast_result_to_fp16 = false;
-  string function_name;
+  std::string function_name;
   switch (prim_type) {
     case F16:
       cast_result_to_fp16 = true;

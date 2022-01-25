@@ -28,8 +28,8 @@ limitations under the License.
 #include "tensorflow/compiler/xla/xla_data.pb.h"
 #include "tensorflow/core/lib/core/status.h"
 #include "tensorflow/core/platform/macros.h"
-#include "tensorflow/core/platform/stream_executor_no_cuda.h"
-#include "tensorflow/core/platform/types.h"
+#include "tensorflow/core/platform/mutex.h"
+#include "tensorflow/stream_executor/platform.h"
 
 namespace xla {
 
@@ -49,9 +49,14 @@ class DeviceAssignment : public Array2D<int> {
   int replica_count() const { return height(); }
   int computation_count() const { return width(); }
 
+  // The logical ID of a device is its (replica ID, computation ID) pair.
+  struct LogicalID {
+    int replica_id;
+    int computation_id;
+  };
+
   // Finds the (replica ID, computation ID) pair for the given device.
-  StatusOr<std::pair<int, int>> LogicalIdsForDevice(
-      GlobalDeviceId device_id) const;
+  StatusOr<LogicalID> LogicalIdForDevice(GlobalDeviceId device_id) const;
   // Finds the replica ID for the given device.
   StatusOr<int> ReplicaIdForDevice(GlobalDeviceId device_id) const;
 
@@ -64,7 +69,7 @@ class DeviceAssignment : public Array2D<int> {
   static StatusOr<std::unique_ptr<DeviceAssignment>> Deserialize(
       const DeviceAssignmentProto& proto);
 
-  string ToString() const;
+  std::string ToString() const;
 };
 
 // A generic implementation of the XLA computation placer, which assigns device
@@ -113,7 +118,8 @@ class ComputationPlacer {
   // Map from platform kind to computation placer singleton.
   static std::map<se::Platform::Id, State>* GetPlatformComputationPlacers();
 
-  TF_DISALLOW_COPY_AND_ASSIGN(ComputationPlacer);
+  ComputationPlacer(const ComputationPlacer&) = delete;
+  ComputationPlacer& operator=(const ComputationPlacer&) = delete;
 };
 
 }  // namespace xla

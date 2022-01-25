@@ -72,8 +72,14 @@ extern const char* kModelWithCustomOp;
 // Test model with a argmax op.
 extern const char* kModelWithArgMaxOp;
 
-// Test model with a argmax op.
+// Test model with a fully connected op.
 extern const char* kModelWithFCOp;
+
+// Test model with a gather_nd op.
+extern const char* kModelWithGatherNDOp;
+
+// Test model with a Where op.
+extern const char* kModelWithWhereOp;
 
 // Test model with mixed quantizable and un-quantizable ops.
 // reshape->custom->custom->squeeze.
@@ -121,6 +127,9 @@ extern const char* kModelWithUnpack;
 
 // Test QAT model with fc op.
 extern const char* kQatModelWithFc;
+
+// Test calibrated model with resource variables.
+extern const char* kModelWithResourceVarsCalibrated;
 
 // An error reporter that fails on testing.
 class FailOnErrorReporter : public ErrorReporter {

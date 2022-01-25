@@ -6,12 +6,11 @@ load("//tensorflow/python/tools/api/generator:api_init_files.bzl", "KERAS_API_IN
 load("//tensorflow/python/tools/api/generator:api_init_files_v1.bzl", "KERAS_API_INIT_FILES_V1", "TENSORFLOW_API_INIT_FILES_V1")
 
 package(
-    licenses = ["notice"],  # Apache 2.0
+    licenses = ["notice"],
 )
 
 exports_files(
     [
-        "LICENSE",
         "create_python_api.py",
     ],
 )
@@ -45,7 +44,7 @@ py_test(
         "create_python_api_test.py",
     ],
     python_version = "PY3",
-    srcs_version = "PY2AND3",
+    srcs_version = "PY3",
     deps = [
         ":doc_srcs",
         "//tensorflow/python:client_testlib",
@@ -62,7 +61,7 @@ py_test(
     ] + KERAS_API_INIT_FILES + KERAS_API_INIT_FILES_V1 + TENSORFLOW_API_INIT_FILES + TENSORFLOW_API_INIT_FILES_V1,
     main = "doc_srcs_test.py",
     python_version = "PY3",
-    srcs_version = "PY2AND3",
+    srcs_version = "PY3",
     deps = [
         ":doc_srcs",
         "//tensorflow/python:client_testlib",
@@ -78,7 +77,7 @@ py_test(
         "api_init_files_v1.bzl",
     ],
     python_version = "PY3",
-    srcs_version = "PY2AND3",
+    srcs_version = "PY3",
     tags = [
         "no_pip",
     ],
@@ -89,6 +88,7 @@ py_test(
         "//tensorflow/python:modules_with_exports",
         "//tensorflow/python:no_contrib",
         "//tensorflow/python/distribute:combinations",
+        "//tensorflow/python/distribute:merge_call_interim",
         "//tensorflow/python/distribute:multi_process_runner",
         "//tensorflow/python/distribute:multi_worker_test_base",
         "//tensorflow/python/tools/api/generator:create_python_api",

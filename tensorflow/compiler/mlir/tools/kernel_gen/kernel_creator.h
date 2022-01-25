@@ -28,19 +28,24 @@ limitations under the License.
 #include "llvm/ADT/StringRef.h"
 #include "mlir/IR/BuiltinOps.h"  // from @llvm-project
 #include "mlir/IR/MLIRContext.h"  // from @llvm-project
-#include "tensorflow/compiler/xla/statusor.h"
+#include "tensorflow/core/platform/statusor.h"
 
 namespace tensorflow {
 namespace kernel_gen {
 
-// Converts TF code to LLVM/NVVM. Lowers the host side to LLVM Dialect.
-xla::StatusOr<mlir::OwningModuleRef> GenerateKernelForTfCode(
+// Parses tf_code to create a module. An MLIRContext is taken in case any
+// unexpected dialects are needed.
+StatusOr<mlir::OwningModuleRef> SetupContextAndParseModule(
+    mlir::MLIRContext& context, llvm::StringRef tf_code);
+
+// Converts TF code to LLVM with or without GPU support.
+StatusOr<mlir::OwningModuleRef> GenerateKernelForTfCode(
     mlir::MLIRContext& context, llvm::StringRef tf_code,
-    llvm::ArrayRef<std::string> architectures = {"sm_75"},
-    llvm::ArrayRef<uint32_t> tile_sizes = {16, 64},
-    llvm::ArrayRef<uint32_t> unroll_factors = {},
-    bool embed_memref_prints = false, bool generate_fatbin = true,
-    bool print_ptx = false, bool enable_ftz = false);
+    llvm::ArrayRef<std::string> architectures,
+    llvm::ArrayRef<int64_t> tile_sizes, llvm::ArrayRef<int64_t> unroll_factors,
+    int64_t max_supported_rank, bool embed_memref_prints, bool print_ptx,
+    bool print_llvmir, bool enable_ftz, bool index_64bit, bool cpu_codegen,
+    bool jit_compile, bool jit_i64_indexed_for_large_tensors);
 
 }  // namespace kernel_gen
 }  // namespace tensorflow

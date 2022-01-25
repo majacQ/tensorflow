@@ -14,7 +14,12 @@ limitations under the License.
 ==============================================================================*/
 
 // This is the legalization pattern definition file for CHLO to MHLO.
+// These are included in the PopulateDecomposeChloPatterns factory
+// and should only include canonical expansions which are not actually
+// ambiguous/different for various backends. Avoid patterns that are actually
+// lowering to non-canonical forms.
 
+include "mlir/Dialect/Shape/IR/ShapeOps.td"
 include "mlir/IR/OpBase.td"
 include "mlir-hlo/Dialect/mhlo/IR/hlo_ops.td"
 include "mlir-hlo/Dialect/mhlo/IR/chlo_ops.td"
@@ -22,10 +27,6 @@ include "mlir-hlo/Dialect/mhlo/IR/chlo_ops.td"
 //===----------------------------------------------------------------------===//
 // Unary op patterns.
 //===----------------------------------------------------------------------===//
-
-def NonComplexElementType : Type<
-  CPred<"!$_self.cast<ShapedType>().getElementType().isa<ComplexType>()">,
-  "Non complex element type">;
 
 // Expand acos to MHLO dialect as follows:
 //   acos(x) = 2 * atan2(sqrt(1 - x^2), (1 + x))  if x != -1
@@ -58,6 +59,58 @@ def : Pat<(HLOClient_AcosOp NonComplexElementType:$input),
       )
     ),
     (HLO_ConstantLike<"M_PI"> $input)
+  )>;
+
+// Expand acosh to MHLO dialect as follows:
+//   acosh(x) = log(x + sqrt(x^2 - 1))      if x >= -1
+//            = log(x + sqrt((x+1)*(x-1)))
+//   acosh(x) = nan                         if x < -1
+//
+// If x^2 will overflow, we approximate sqrt(x^2 - 1) == x and compute as
+// log(2*x) = log(2) + log(x).  (Note this works because negative x never
+// overflows; x < -1 simply yields nan.
+def : Pat<(HLOClient_AcoshOp NonComplexElementType:$input),
+  (HLO_SelectOp
+    (HLO_CompareOp
+      $input,
+      (HLO_ConstantLike<"-1"> $input),
+      HLO_COMPARISON_DIRECTION_LT,
+      (HLO_DEFAULT_COMPARISON_TYPE)
+    ),
+    (HLO_ConstantLike<"NAN"> $input),
+    (HLO_SelectOp
+      (HLO_CompareOp
+        $input,
+        (HLO_SqrtOp
+          (HLO_ConstantLikeMaxFiniteValue $input)
+        ),
+        HLO_COMPARISON_DIRECTION_GE,
+        (HLO_DEFAULT_COMPARISON_TYPE)
+      ),
+      (HLO_AddOp
+        (HLO_LogOp $input),
+        (HLO_LogOp
+          (HLO_ConstantLike<"2"> $input)
+        )
+      ),
+      (HLO_LogOp
+        (HLO_AddOp
+          $input,
+          (HLO_SqrtOp
+            (HLO_MulOp
+              (HLO_AddOp
+                (HLO_ConstantLike<"1"> $input),
+                $input
+              ),
+              (HLO_AddOp
+                (HLO_ConstantLike<"-1"> $input),
+                $input
+              )
+            )
+          )
+        )
+      )
+    )
   )>;
 
 // Expand asin to MHLO dialect as follows:
@@ -203,76 +256,31 @@ def : Pat<(HLOClient_AtanhOp NonComplexElementType:$input),
 def : Pat<(HLOClient_ConjOp $v),
           (HLO_ComplexOp (HLO_RealOp $v), (HLO_NegOp (HLO_ImagOp $v)))>;
 
-// Express `cosh` as
-//   cosh(x) = (e^x + e^-x) / 2
-//           = e^(x + log(1/2)) + e^(-x + log(1/2))
-//
-// The second formulation avoids overflowing when e^x = inf but (e^x)/2 is not.
-//
-// This incorrectly overflows to inf for two f32 input values, namely
-// +/-89.4159851, due to rounding error when computing x +/- log(1/2).  The
-// correct answer of 3.40281961e+38 (0x7f7fffec) is very close to max-float, so
-// we deem this acceptable.
-def : Pat<(HLOClient_CoshOp NonComplexElementType:$input),
-  (HLO_AddOp
-    (HLO_ExpOp
-      (HLO_AddOp
-        $input,
-        (HLO_LogOp
-          (HLO_ConstantLike<"0.5"> $input)
-        )
-      )
-    ),
-    (HLO_ExpOp
-      (HLO_AddOp
-        (HLO_NegOp $input),
-        (HLO_LogOp
-          (HLO_ConstantLike<"0.5"> $input)
-        )
-      )
-    )
+// Express `is_inf` as
+//   is_inf(x) = is_pos_inf(|x|)
+def : Pat<(HLOClient_IsInfOp NonComplexElementType:$input),
+  (HLOClient_IsPosInfOp
+    (HLO_AbsOp $input)
   )>;
 
-// Express `sinh` as
-//   sinh(x) = (e^x - e^-x) / 2                     if |x| < 1
-//           = e^(x + log(1/2)) - e^(-x + log(1/2)) otherwise.
-// TODO(hinsu): Support operands with complex element types by always using the
-// second formula. The compare op below is not legal for complex numbers.
-def : Pat<(HLOClient_SinhOp NonComplexElementType:$input),
-  (HLO_SelectOp
-    (HLO_CompareOp
-      (HLO_AbsOp $input),
-      (HLO_ConstantLike<"1"> $input),
-      HLO_COMPARISON_DIRECTION_LT,
-      (HLO_DEFAULT_COMPARISON_TYPE)
-    ),
-    (HLO_DivOp
-      (HLO_SubOp
-        (HLO_ExpOp $input),
-        (HLO_ExpOp
-          (HLO_NegOp $input)
-        )
-      ),
-      (HLO_ConstantLike<"2"> $input)
-    ),
-    (HLO_SubOp
-      (HLO_ExpOp
-        (HLO_AddOp
-          $input,
-          (HLO_LogOp
-            (HLO_ConstantLike<"0.5"> $input)
-          )
-        )
-      ),
-      (HLO_ExpOp
-        (HLO_SubOp
-          (HLO_LogOp
-            (HLO_ConstantLike<"0.5"> $input)
-          ),
-          $input
-        )
-      )
-    )
+// Express `is_pos_inf` as
+//   is_pos_inf(x) = (x == +inf)
+def : Pat<(HLOClient_IsPosInfOp NonComplexElementType:$input),
+  (HLO_CompareOp
+    $input,
+    (HLO_ConstantLikePosInfValue $input),
+    HLO_COMPARISON_DIRECTION_EQ,
+    (HLO_DEFAULT_COMPARISON_TYPE)
+  )>;
+
+// Express `is_neg_inf` as
+//   is_neg_inf(x) = (x == -inf)
+def : Pat<(HLOClient_IsNegInfOp NonComplexElementType:$input),
+  (HLO_CompareOp
+    $input,
+    (HLO_ConstantLikeNegInfValue $input),
+    HLO_COMPARISON_DIRECTION_EQ,
+    (HLO_DEFAULT_COMPARISON_TYPE)
   )>;
 
 // Express tan in MHLO dialect as

@@ -4,7 +4,7 @@ package(
     default_visibility = [
         "//visibility:public",
     ],
-    licenses = ["notice"],  # Apache 2.0
+    licenses = ["notice"],
 )
 
 py_binary(
@@ -12,11 +12,10 @@ py_binary(
     srcs = ["accuracy_utils.py"],
     main = "accuracy_utils.py",
     python_version = "PY3",
-    srcs_version = "PY2AND3",
+    srcs_version = "PY3",
     deps = [
         "//tensorflow:tensorflow_py",
         "//third_party/py/numpy",
-        "@six_archive//:six",
     ],
 )
 
@@ -25,11 +24,10 @@ py_binary(
     srcs = ["recognize_commands.py"],
     main = "recognize_commands.py",
     python_version = "PY3",
-    srcs_version = "PY2AND3",
+    srcs_version = "PY3",
     deps = [
         "//tensorflow:tensorflow_py",
         "//third_party/py/numpy",
-        "@six_archive//:six",
     ],
 )
 
@@ -38,7 +36,7 @@ py_binary(
     srcs = ["test_streaming_accuracy.py"],
     main = "test_streaming_accuracy.py",
     python_version = "PY3",
-    srcs_version = "PY2AND3",
+    srcs_version = "PY3",
     deps = [
         ":accuracy_utils_py",
         ":recognize_commands_py",
@@ -56,7 +54,6 @@ py_library(
     deps = [
         "//tensorflow:tensorflow_py",
         "//third_party/py/numpy",
-        "@six_archive//:six",
     ],
 )
 
@@ -83,7 +80,6 @@ py_library(
         "//tensorflow:tensorflow_py",
         "//tensorflow/lite/experimental/microfrontend:audio_microfrontend_py",
         "//third_party/py/numpy",
-        "@six_archive//:six",
     ],
 )
 
@@ -106,7 +102,7 @@ py_binary(
     name = "train",
     srcs = ["train.py"],
     python_version = "PY3",
-    srcs_version = "PY2AND3",
+    srcs_version = "PY3",
     deps = [":train_main_lib"],
 )
 
@@ -121,7 +117,6 @@ py_library(
         ":models",
         "//tensorflow:tensorflow_py",
         "//third_party/py/numpy",
-        "@six_archive//:six",
     ],
 )
 
@@ -143,7 +138,7 @@ py_binary(
     name = "freeze",
     srcs = ["freeze.py"],
     python_version = "PY3",
-    srcs_version = "PY2AND3",
+    srcs_version = "PY3",
     deps = [":freeze_main_lib"],
 )
 
@@ -188,7 +183,7 @@ py_binary(
     name = "wav_to_features",
     srcs = ["wav_to_features.py"],
     python_version = "PY3",
-    srcs_version = "PY2AND3",
+    srcs_version = "PY3",
     deps = [":wav_to_features_main_lib"],
 )
 
@@ -230,7 +225,7 @@ py_binary(
     name = "generate_streaming_test_wav",
     srcs = ["generate_streaming_test_wav.py"],
     python_version = "PY3",
-    srcs_version = "PY2AND3",
+    srcs_version = "PY3",
     deps = [":generate_streaming_test_wav_main_lib"],
 )
 
@@ -288,7 +283,7 @@ py_binary(
     name = "label_wav",
     srcs = ["label_wav.py"],
     python_version = "PY3",
-    srcs_version = "PY2AND3",
+    srcs_version = "PY3",
     deps = [":label_wav_main_lib"],
 )
 

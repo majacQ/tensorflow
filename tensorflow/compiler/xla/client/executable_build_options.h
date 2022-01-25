@@ -23,7 +23,14 @@ limitations under the License.
 #include "tensorflow/compiler/xla/util.h"
 #include "tensorflow/compiler/xla/xla.pb.h"
 #include "tensorflow/compiler/xla/xla_data.pb.h"
-#include "tensorflow/stream_executor/device_memory_allocator.h"
+#include "tensorflow/core/platform/threadpool.h"
+
+namespace stream_executor {
+
+// Forward-declared to avoid StreamExecutor dependency.
+class DeviceMemoryAllocator;
+
+}  // namespace stream_executor
 
 namespace xla {
 
@@ -66,7 +73,7 @@ class ExecutableBuildOptions {
 
   // Returns a string representation of the build options, suitable for
   // debugging.
-  string ToString() const;
+  std::string ToString() const;
 
   // The number of replicas of this computation that are to be executed.
   // Defaults to 1.
@@ -84,12 +91,6 @@ class ExecutableBuildOptions {
 
   bool deduplicate_hlo() const { return deduplicate_hlo_; }
   ExecutableBuildOptions& set_deduplicate_hlo(bool deduplicate_hlo);
-
-  bool broadcast_replicated_params() const {
-    return broadcast_replicated_params_;
-  }
-  ExecutableBuildOptions& set_broadcast_replicated_params(
-      bool broadcast_replicated_params);
 
   // If set, this specifies a static device assignment for the computation.
   // Otherwise, the computation will be compiled generically and can be run with
@@ -121,6 +122,23 @@ class ExecutableBuildOptions {
     return *this;
   }
 
+  bool allow_spmd_sharding_propagation_to_output() const {
+    return allow_spmd_sharding_propagation_to_output_;
+  }
+  // Allows sharding propagation to propagate to the outputs. This changes the
+  // output shape of the computation (which is undesirable), but it can be used
+  // to allow to run partial compilation to determine what would be the output
+  // sharding of a computation if XLA would be allowed to propagate the sharding
+  // which can be used by higher level framework as a way to query intermediate
+  // sharding of operations when multiple computation would be chained and
+  // merged together.
+  ExecutableBuildOptions& set_allow_spmd_sharding_propagation_to_output(
+      bool allow_spmd_sharding_propagation_to_output) {
+    allow_spmd_sharding_propagation_to_output_ =
+        allow_spmd_sharding_propagation_to_output;
+    return *this;
+  }
+
   // Thread pool for parallel compilation.
   tensorflow::thread::ThreadPool* compile_thread_pool() const {
     return compile_thread_pool_;
@@ -145,6 +163,7 @@ class ExecutableBuildOptions {
   absl::optional<DeviceAssignment> device_assignment_;
   bool alias_passthrough_params_ = false;
   bool run_backend_only_ = false;
+  bool allow_spmd_sharding_propagation_to_output_ = false;
   tensorflow::thread::ThreadPool* compile_thread_pool_ = nullptr;
 };
 

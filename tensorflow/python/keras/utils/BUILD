@@ -9,8 +9,9 @@ package(
     default_visibility = [
         "//tensorflow/python/feature_column:__pkg__",
         "//tensorflow/python/keras:__subpackages__",
+        "//tensorflow/tools/pip_package:__pkg__",
     ],
-    licenses = ["notice"],  # Apache 2.0
+    licenses = ["notice"],
 )
 
 filegroup(
@@ -83,9 +84,6 @@ py_library(
     name = "io_utils",
     srcs = ["io_utils.py"],
     srcs_version = "PY3",
-    deps = [
-        "@six_archive//:six",
-    ],
 )
 
 py_library(
@@ -102,8 +100,8 @@ py_library(
         "//tensorflow/python:tensor_util",
         "//tensorflow/python:util",
         "//tensorflow/python:variables",
+        "//tensorflow/python/distribute/coordinator:cluster_coordinator",
         "//tensorflow/python/eager:context",
-        "@six_archive//:six",
     ],
 )
 
@@ -245,6 +243,32 @@ py_library(
     srcs_version = "PY3",
     deps = [
         "//tensorflow/python:util",
+    ],
+)
+
+py_library(
+    name = "dataset_creator",
+    srcs = [
+        "dataset_creator.py",
+    ],
+    srcs_version = "PY3",
+    deps = [
+        "//tensorflow/python:util",
+        "//tensorflow/python/util:tf_export",
+    ],
+)
+
+tf_py_test(
+    name = "dataset_creator_test",
+    srcs = ["dataset_creator_test.py"],
+    python_version = "PY3",
+    deps = [
+        ":dataset_creator",
+        "//tensorflow/python/distribute:multi_worker_test_base",
+        "//tensorflow/python/keras:combinations",
+        "//tensorflow/python/keras/distribute:multi_worker_testing_utils",
+        "//tensorflow/python/keras/engine",
+        "//tensorflow/python/keras/layers:core",
     ],
 )
 
@@ -439,13 +463,33 @@ tf_py_test(
         "//tensorflow/python:constant_op",
         "//tensorflow/python:framework_ops",
         "//tensorflow/python:framework_test_lib",
-        "//tensorflow/python:ops",
         "//tensorflow/python:platform_test",
         "//tensorflow/python/eager:context",
         "//tensorflow/python/keras",
         "//tensorflow/python/keras:combinations",
         "//tensorflow/python/ops/ragged:ragged_factory_ops",
         "//tensorflow/python/ops/ragged:ragged_tensor",
+        "//tensorflow/python/user_ops:ops",
         "@absl_py//absl/testing:parameterized",
+    ],
+)
+
+tf_py_test(
+    name = "losses_utils_test",
+    size = "small",
+    srcs = ["losses_utils_test.py"],
+    python_version = "PY3",
+    deps = [
+        "//tensorflow/python:constant_op",
+        "//tensorflow/python:framework_ops",
+        "//tensorflow/python:framework_test_lib",
+        "//tensorflow/python:platform_test",
+        "//tensorflow/python/eager:context",
+        "//tensorflow/python/keras",
+        "//tensorflow/python/keras:combinations",
+        "//tensorflow/python/ops/ragged:ragged_array_ops",
+        "//tensorflow/python/ops/ragged:ragged_concat_ops",
+        "//tensorflow/python/ops/ragged:ragged_factory_ops",
+        "//tensorflow/python/user_ops:ops",
     ],
 )

@@ -26,7 +26,6 @@ limitations under the License.
 #include "tensorflow/compiler/xla/xla_data.pb.h"
 #include "tensorflow/core/platform/macros.h"
 #include "tensorflow/core/platform/stream_executor_no_cuda.h"
-#include "tensorflow/core/platform/types.h"
 
 namespace xla {
 namespace gpu {
@@ -41,21 +40,11 @@ class GpuTransferManager : public GenericTransferManager {
   Status TransferLiteralToInfeed(se::StreamExecutor* executor,
                                  const LiteralSlice& literal) override;
   Status TransferLiteralFromOutfeed(se::StreamExecutor* executor,
-                                    const Shape& literal_shape,
                                     MutableBorrowingLiteral literal) override;
 
  private:
-  // Initiates the infeed data transfers. InfeedBuffer->Done() must be
-  // called to clean up the memory allocated for InfeedBuffer.
-  StatusOr<InfeedBuffer> TransferBufferToInfeedInternal(
-      se::StreamExecutor* executor, int64 size, const void* source);
-
-  // Enqueues infeed data buffers with the infeed manager after their
-  // transfer completes.
-  Status EnqueueBuffersToInfeed(se::StreamExecutor* executor,
-                                ShapeTree<InfeedBuffer> buffers);
-
-  TF_DISALLOW_COPY_AND_ASSIGN(GpuTransferManager);
+  GpuTransferManager(const GpuTransferManager&) = delete;
+  GpuTransferManager& operator=(const GpuTransferManager&) = delete;
 };
 
 }  // namespace gpu

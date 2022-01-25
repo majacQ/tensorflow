@@ -28,6 +28,7 @@ limitations under the License.
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_types.h"
 #include "tensorflow/compiler/mlir/tensorflow/transforms/passes.h"
+#include "tensorflow/compiler/mlir/tensorflow/transforms/passes_detail.h"
 
 namespace mlir {
 namespace TF {
@@ -35,7 +36,7 @@ namespace TF {
 namespace {
 
 struct FunctionalControlFlowToCFG
-    : public PassWrapper<FunctionalControlFlowToCFG, FunctionPass> {
+    : public FunctionalControlFlowToCFGPassBase<FunctionalControlFlowToCFG> {
   void runOnFunction() override;
 };
 
@@ -149,7 +150,7 @@ static LogicalResult LowerIfOp(IfOp op) {
   // Add the block arguments to the merge point, and replace all uses of the
   // original operation results with them.
   for (Value value : op_inst->getResults())
-    merge_block->addArgument(value.getType());
+    merge_block->addArgument(value.getType(), loc);
   ReplaceOpResultWithBlockArgs(loc, op_inst, merge_block, &builder);
 
   // Get arguments to the branches after dropping the condition which is the
@@ -224,11 +225,11 @@ static LogicalResult LowerWhileOp(WhileOp op) {
   // for body_block and orig_block_tail to have arguments of the same types as
   // they have exactly one call-site and they are sharing the operands.
   for (Type type : cond_fn.getType().getInputs()) {
-    cond_block->addArgument(type);
+    cond_block->addArgument(type, loc);
   }
   for (Type type : body_fn.getType().getInputs()) {
-    body_block->addArgument(type);
-    orig_block_tail->addArgument(type);
+    body_block->addArgument(type, loc);
+    orig_block_tail->addArgument(type, loc);
   }
 
   auto get_operand = [&](int i) { return op_inst->getOperand(i); };
@@ -303,11 +304,6 @@ void FunctionalControlFlowToCFG::runOnFunction() {
 std::unique_ptr<OperationPass<FuncOp>> CreateTFFunctionalControlFlowToCFG() {
   return std::make_unique<FunctionalControlFlowToCFG>();
 }
-
-static PassRegistration<FunctionalControlFlowToCFG> pass(
-    "tf-functional-control-flow-to-cfg",
-    "Transform functional control flow Ops to MLIR Control Form Graph "
-    "(CFG) form");
 
 }  // namespace TF
 }  // namespace mlir

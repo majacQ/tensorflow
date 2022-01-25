@@ -19,14 +19,12 @@ See the [Summaries and
 TensorBoard](https://www.tensorflow.org/guide/summaries_and_tensorboard) guide.
 """
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
+import warnings
 
 from google.protobuf import json_format as _json_format
 
 # exports Summary, SummaryDescription, Event, TaggedRunMetadata, SessionLog
-# pylint: disable=unused-import
+# pylint: disable=unused-import, g-importing-member
 from tensorflow.core.framework.summary_pb2 import Summary
 from tensorflow.core.framework.summary_pb2 import SummaryDescription
 from tensorflow.core.framework.summary_pb2 import SummaryMetadata as _SummaryMetadata  # pylint: enable=unused-import
@@ -43,6 +41,7 @@ from tensorflow.python.framework import ops as _ops
 from tensorflow.python.ops import gen_logging_ops as _gen_logging_ops
 from tensorflow.python.ops import gen_summary_ops as _gen_summary_ops  # pylint: disable=unused-import
 from tensorflow.python.ops import summary_op_util as _summary_op_util
+from tensorflow.python.ops import summary_ops_v2 as _summary_ops_v2
 
 # exports FileWriter, FileWriterCache
 # pylint: disable=unused-import
@@ -74,7 +73,70 @@ def scalar(name, tensor, collections=None, family=None):
 
   Raises:
     ValueError: If tensor has the wrong shape or type.
+
+  @compatibility(TF2)
+  For compatibility purposes, when invoked in TF2 where the outermost context is
+  eager mode, this API will check if there is a suitable TF2 summary writer
+  context available, and if so will forward this call to that writer instead. A
+  "suitable" writer context means that the writer is set as the default writer,
+  and there is an associated non-empty value for `step` (see
+  `tf.summary.SummaryWriter.as_default`, or alternatively
+  `tf.summary.experimental.set_step`). For the forwarded call, the arguments
+  here will be passed to the TF2 implementation of `tf.summary.scalar`, and the
+  return value will be an empty bytestring tensor, to avoid duplicate summary
+  writing. This forwarding is best-effort and not all arguments will be
+  preserved.
+
+  To migrate to TF2, please use `tf.summary.scalar` instead. Please check
+  [Migrating tf.summary usage to
+  TF 2.0](https://www.tensorflow.org/tensorboard/migrate#in_tf_1x) for concrete
+  steps for migration. `tf.summary.scalar` can also log training metrics in
+  Keras, you can check [Logging training metrics in
+  Keras](https://www.tensorflow.org/tensorboard/scalars_and_keras) for detials.
+
+  #### How to Map Arguments
+
+  | TF1 Arg Name  | TF2 Arg Name    | Note                                   |
+  | :------------ | :-------------- | :------------------------------------- |
+  | `name`        | `name`          | -                                      |
+  | `tensor`      | `data`          | -                                      |
+  | -             | `step`          | Explicit int64-castable monotonic step |
+  :               :                 : value. If omitted, this defaults to    :
+  :               :                 : `tf.summary.experimental.get_step()`.  :
+  | `collections` | Not Supported   | -                                      |
+  | `family`      | Removed         | Please use `tf.name_scope` instead to  |
+  :               :                 : manage summary name prefix.            :
+  | -             | `description`   | Optional long-form `str` description   |
+  :               :                 : for the summary. Markdown is supported.:
+  :               :                 : Defaults to empty.                     :
+
+  @end_compatibility
   """
+  # Special case: invoke v2 op for TF2 users who have a v2 writer.
+  if _ops.executing_eagerly_outside_functions():
+    if not _summary_ops_v2.has_default_writer():
+      # A default summary writer needs to be present.
+      warnings.warn(
+          'Cannot activate TF2 compatibility support for TF1 summary ops: '
+          'default summary writer not found.')
+
+    elif _summary_ops_v2.get_step() is None:
+      # Users need to call `tf.summary.experimental.set_step` to invoke v2 API.
+      warnings.warn(
+          'Cannot activate TF2 compatibility support for TF1 summary ops: '
+          'global step not set. To set step for summary writer, '
+          'use `tf.summary.experimental.set_step`.')
+    else:
+      # Defer the import to happen inside the symbol to prevent breakage due to
+      # missing dependency.
+      from tensorboard.summary.v2 import scalar as scalar_v2  # pylint: disable=g-import-not-at-top
+      # TODO(b/210992280): Handle the family argument.
+      scalar_v2(name, data=tensor)
+      # Return an empty Tensor, which will be acceptable as an input to the
+      # `tf.compat.v1.summary.merge()` API.
+      return _constant_op.constant(b'')
+
+  # Fall back to legacy v1 scalar implementation.
   if _distribute_summary_op_util.skip_summary():
     return _constant_op.constant('')
   with _summary_op_util.summary_scope(
@@ -129,6 +191,32 @@ def image(name, tensor, max_outputs=3, collections=None, family=None):
   Returns:
     A scalar `Tensor` of type `string`. The serialized `Summary` protocol
     buffer.
+
+  @compatibility(TF2)
+  This API is not compatible with eager execution and `tf.function`. To migrate
+  to TF2, please use `tf.summary.image` instead. Please check
+  [Migrating tf.summary usage to
+  TF 2.0](https://www.tensorflow.org/tensorboard/migrate#in_tf_1x) for concrete
+  steps for migration.
+
+  #### How to Map Arguments
+
+  | TF1 Arg Name  | TF2 Arg Name    | Note                                   |
+  | :------------ | :-------------- | :------------------------------------- |
+  | `name`        | `name`          | -                                      |
+  | `tensor`      | `data`          | -                                      |
+  | -             | `step`          | Explicit int64-castable monotonic step |
+  :               :                 : value. If omitted, this defaults to    :
+  :               :                 : `tf.summary.experimental.get_step()`.  :
+  | `max_outputs` | `max_outputs`   | -                                      |
+  | `collections` | Not Supported   | -                                      |
+  | `family`      | Removed         | Please use `tf.name_scope` instead     |
+  :               :                 : to manage summary name prefix.         :
+  | -             | `description`   | Optional long-form `str` description   |
+  :               :                 : for the summary. Markdown is supported.:
+  :               :                 : Defaults to empty.                     :
+
+  @end_compatibility
   """
   if _distribute_summary_op_util.skip_summary():
     return _constant_op.constant('')
@@ -169,6 +257,33 @@ def histogram(name, values, collections=None, family=None):
   Returns:
     A scalar `Tensor` of type `string`. The serialized `Summary` protocol
     buffer.
+
+  @compatibility(TF2)
+  This API is not compatible with eager execution and `tf.function`. To migrate
+  to TF2, please use `tf.summary.histogram` instead. Please check
+  [Migrating tf.summary usage to
+  TF 2.0](https://www.tensorflow.org/tensorboard/migrate#in_tf_1x) for concrete
+  steps for migration.
+
+  #### How to Map Arguments
+
+  | TF1 Arg Name  | TF2 Arg Name    | Note                                   |
+  | :------------ | :-------------- | :------------------------------------- |
+  | `name`        | `name`          | -                                      |
+  | `values`      | `data`          | -                                      |
+  | -             | `step`          | Explicit int64-castable monotonic step |
+  :               :                 : value. If omitted, this defaults to    :
+  :               :                 : `tf.summary.experimental.get_step()`   :
+  | -             | `buckets`       | Optional positive `int` specifying     |
+  :               :                 : the histogram bucket number.           :
+  | `collections` | Not Supported   | -                                      |
+  | `family`      | Removed         | Please use `tf.name_scope` instead     |
+  :               :                 : to manage summary name prefix.         :
+  | -             | `description`   | Optional long-form `str` description   |
+  :               :                 : for the summary. Markdown is supported.:
+  :               :                 : Defaults to empty.                     :
+
+  @end_compatibility
   """
   if _distribute_summary_op_util.skip_summary():
     return _constant_op.constant('')
@@ -216,6 +331,42 @@ def audio(name, tensor, sample_rate, max_outputs=3, collections=None,
   Returns:
     A scalar `Tensor` of type `string`. The serialized `Summary` protocol
     buffer.
+
+  @compatibility(TF2)
+  This API is not compatible with eager execution or `tf.function`. To migrate
+  to TF2, please use `tf.summary.audio` instead. Please check
+  [Migrating tf.summary usage to
+  TF 2.0](https://www.tensorflow.org/tensorboard/migrate#in_tf_1x) for concrete
+  steps for migration.
+
+  #### How to Map Arguments
+
+  | TF1 Arg Name  | TF2 Arg Name    | Note                                   |
+  | :------------ | :-------------- | :------------------------------------- |
+  | `name`        | `name`          | -                                      |
+  | `tensor`      | `data`          | Input for this argument now must be    |
+  :               :                 : three-dimensional `[k, t, c]`, where   :
+  :               :                 : `k` is the number of audio clips, `t`  :
+  :               :                 : is the number of frames, and `c` is    :
+  :               :                 : the number of channels. Two-dimensional:
+  :               :                 : input is no longer supported.          :
+  | `sample_rate` | `sample_rate`   | -                                      |
+  | -             | `step`          | Explicit int64-castable monotonic step |
+  :               :                 : value. If omitted, this defaults to    :
+  :               :                 : `tf.summary.experimental.get_step()`.  :
+  | `max_outputs` | `max_outputs`   | -                                      |
+  | `collections` | Not Supported   | -                                      |
+  | `family`      | Removed         | Please use `tf.name_scope` instead to  |
+  :               :                 : manage summary name prefix.            :
+  | -             | `encoding`      | Optional constant str for the desired  |
+  :               :                 : encoding. Check the docs for           :
+  :               :                 : `tf.summary.audio` for latest supported:
+  :               :                 : audio formats.                         :
+  | -             | `description`   | Optional long-form `str` description   |
+  :               :                 : for the summary. Markdown is supported.:
+  :               :                 : Defaults to empty.                     :
+
+  @end_compatibility
   """
   if _distribute_summary_op_util.skip_summary():
     return _constant_op.constant('')
@@ -256,6 +407,29 @@ def text(name, tensor, collections=None):
 
   Raises:
     ValueError: If tensor has the wrong type.
+
+  @compatibility(TF2)
+  This API is not compatible with eager execution or `tf.function`. To migrate
+  to TF2, please use `tf.summary.text` instead. Please check
+  [Migrating tf.summary usage to
+  TF 2.0](https://www.tensorflow.org/tensorboard/migrate#in_tf_1x) for concrete
+  steps for migration.
+
+  #### How to Map Arguments
+
+  | TF1 Arg Name  | TF2 Arg Name    | Note                                   |
+  | :------------ | :-------------- | :------------------------------------- |
+  | `name`        | `name`          | -                                      |
+  | `tensor`      | `data`          | -                                      |
+  | -             | `step`          | Explicit int64-castable monotonic step |
+  :               :                 : value. If omitted, this defaults to    :
+  :               :                 : `tf.summary.experimental.get_step()`.  :
+  | `collections` | Not Supported   | -                                      |
+  | -             | `description`   | Optional long-form `str` description   |
+  :               :                 : for the summary. Markdown is supported.:
+  :               :                 : Defaults to empty.                     :
+
+  @end_compatibility
   """
   if tensor.dtype != _dtypes.string:
     raise ValueError('Expected tensor %s to have dtype string, got %s' %
@@ -354,9 +528,45 @@ def merge(inputs, collections=None, name=None):
   Raises:
     RuntimeError: If called with eager mode enabled.
 
-  @compatibility(eager)
-  Not compatible with eager execution. To write TensorBoard
-  summaries under eager execution, use `tf.contrib.summary` instead.
+  @compatibility(TF2)
+  This API is not compatible with eager execution or `tf.function`. To migrate
+  to TF2, this API can be omitted entirely, because in TF2 individual summary
+  ops, like `tf.summary.scalar()`, write directly to the default summary writer
+  if one is active. Thus, it's not necessary to merge summaries or to manually
+  add the resulting merged summary output to the writer. See the usage example
+  shown below.
+
+  For a comprehensive `tf.summary` migration guide, please follow
+  [Migrating tf.summary usage to
+  TF 2.0](https://www.tensorflow.org/tensorboard/migrate#in_tf_1x).
+
+  #### TF1 & TF2 Usage Example
+
+  TF1:
+
+  ```python
+  dist = tf.compat.v1.placeholder(tf.float32, [100])
+  tf.compat.v1.summary.histogram(name="distribution", values=dist)
+  writer = tf.compat.v1.summary.FileWriter("/tmp/tf1_summary_example")
+  summaries = tf.compat.v1.summary.merge_all()
+
+  sess = tf.compat.v1.Session()
+  for step in range(100):
+    mean_moving_normal = np.random.normal(loc=step, scale=1, size=[100])
+    summ = sess.run(summaries, feed_dict={dist: mean_moving_normal})
+    writer.add_summary(summ, global_step=step)
+  ```
+
+  TF2:
+
+  ```python
+  writer = tf.summary.create_file_writer("/tmp/tf2_summary_example")
+  for step in range(100):
+    mean_moving_normal = np.random.normal(loc=step, scale=1, size=[100])
+    with writer.as_default(step=step):
+      tf.summary.histogram(name='distribution', data=mean_moving_normal)
+  ```
+
   @end_compatibility
   """
   # pylint: enable=line-too-long
@@ -380,7 +590,8 @@ def merge_all(key=_ops.GraphKeys.SUMMARIES, scope=None, name=None):
   Args:
     key: `GraphKey` used to collect the summaries.  Defaults to
       `GraphKeys.SUMMARIES`.
-    scope: Optional scope used to filter the summary ops, using `re.match`
+    scope: Optional scope used to filter the summary ops, using `re.match`.
+    name: A name for the operation (optional).
 
   Returns:
     If no summaries were collected, returns None.  Otherwise returns a scalar
@@ -390,9 +601,45 @@ def merge_all(key=_ops.GraphKeys.SUMMARIES, scope=None, name=None):
   Raises:
     RuntimeError: If called with eager execution enabled.
 
-  @compatibility(eager)
-  Not compatible with eager execution. To write TensorBoard
-  summaries under eager execution, use `tf.contrib.summary` instead.
+  @compatibility(TF2)
+  This API is not compatible with eager execution or `tf.function`. To migrate
+  to TF2, this API can be omitted entirely, because in TF2 individual summary
+  ops, like `tf.summary.scalar()`, write directly to the default summary writer
+  if one is active. Thus, it's not necessary to merge summaries or to manually
+  add the resulting merged summary output to the writer. See the usage example
+  shown below.
+
+  For a comprehensive `tf.summary` migration guide, please follow
+  [Migrating tf.summary usage to
+  TF 2.0](https://www.tensorflow.org/tensorboard/migrate#in_tf_1x).
+
+  #### TF1 & TF2 Usage Example
+
+  TF1:
+
+  ```python
+  dist = tf.compat.v1.placeholder(tf.float32, [100])
+  tf.compat.v1.summary.histogram(name="distribution", values=dist)
+  writer = tf.compat.v1.summary.FileWriter("/tmp/tf1_summary_example")
+  summaries = tf.compat.v1.summary.merge_all()
+
+  sess = tf.compat.v1.Session()
+  for step in range(100):
+    mean_moving_normal = np.random.normal(loc=step, scale=1, size=[100])
+    summ = sess.run(summaries, feed_dict={dist: mean_moving_normal})
+    writer.add_summary(summ, global_step=step)
+  ```
+
+  TF2:
+
+  ```python
+  writer = tf.summary.create_file_writer("/tmp/tf2_summary_example")
+  for step in range(100):
+    mean_moving_normal = np.random.normal(loc=step, scale=1, size=[100])
+    with writer.as_default(step=step):
+      tf.summary.histogram(name='distribution', data=mean_moving_normal)
+  ```
+
   @end_compatibility
   """
   if _context.executing_eagerly():

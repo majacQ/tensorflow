@@ -14,10 +14,6 @@
 # ==============================================================================
 """Tests for tensorflow.ops.check_ops."""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import time
 
 import numpy as np
@@ -38,6 +34,7 @@ from tensorflow.python.ops import check_ops
 from tensorflow.python.ops import gradients
 from tensorflow.python.ops import math_ops
 from tensorflow.python.ops import random_ops
+from tensorflow.python.ops.ragged import ragged_factory_ops
 from tensorflow.python.platform import test
 
 
@@ -285,9 +282,8 @@ First 2 elements of y:
     # The exception in eager and non-eager mode is different because
     # eager mode relies on shape check done as part of the C++ op, while
     # graph mode does shape checks when creating the `Operation` instance.
-    with self.assertRaisesRegex((errors.InvalidArgumentError, ValueError),
-                                (r"Incompatible shapes: \[3\] vs. \[2\]|"
-                                 r"Dimensions must be equal, but are 3 and 2")):
+    with self.assertRaisesIncompatibleShapesError(
+        (errors.InvalidArgumentError, ValueError)):
       with ops.control_dependencies([check_ops.assert_equal(small, small_2)]):
         out = array_ops.identity(small)
       self.evaluate(out)
@@ -353,9 +349,8 @@ class AssertNoneEqualTest(test.TestCase):
     # The exception in eager and non-eager mode is different because
     # eager mode relies on shape check done as part of the C++ op, while
     # graph mode does shape checks when creating the `Operation` instance.
-    with self.assertRaisesRegex((ValueError, errors.InvalidArgumentError),
-                                (r"Incompatible shapes: \[3\] vs. \[2\]|"
-                                 r"Dimensions must be equal, but are 3 and 2")):
+    with self.assertRaisesIncompatibleShapesError(
+        (ValueError, errors.InvalidArgumentError)):
       with ops.control_dependencies(
           [check_ops.assert_none_equal(small, big)]):
         out = array_ops.identity(small)
@@ -581,10 +576,8 @@ class AssertLessTest(test.TestCase):
     # The exception in eager and non-eager mode is different because
     # eager mode relies on shape check done as part of the C++ op, while
     # graph mode does shape checks when creating the `Operation` instance.
-    with self.assertRaisesRegex(  # pylint:disable=g-error-prone-assert-raises
-        (ValueError, errors.InvalidArgumentError),
-        (r"Incompatible shapes: \[3\] vs. \[2\]|"
-         "Dimensions must be equal, but are 3 and 2")):
+    with self.assertRaisesIncompatibleShapesError(
+        (ValueError, errors.InvalidArgumentError)):
       with ops.control_dependencies([check_ops.assert_less(small, big)]):
         out = array_ops.identity(small)
       self.evaluate(out)
@@ -1543,6 +1536,14 @@ class AssertTypeTest(test.TestCase):
     self.evaluate(out)
 
   @test_util.run_in_graph_and_eager_modes
+  def test_raggedtensor_doesnt_raise_when_correct_type(self):
+    x = ragged_factory_ops.constant([[1., 2.], [3.]])
+    with ops.control_dependencies(
+        [check_ops.assert_type(x, dtypes.float32)]):
+      y = array_ops.identity(x)
+    self.assertAllEqual(x, y)
+
+  @test_util.run_in_graph_and_eager_modes
   def test_raises_when_wrong_type(self):
     floats = constant_op.constant([1.0, 2.0], dtype=dtypes.float16)
     with self.assertRaisesRegex(TypeError, "must be of type.*float32"):
@@ -1556,6 +1557,12 @@ class AssertTypeTest(test.TestCase):
         constant_op.constant([500], dtypes.int64))
     with self.assertRaisesRegexp(TypeError, "must be of type.*float32"):
       check_ops.assert_type(sparse_float16, dtypes.float32)
+
+  @test_util.run_in_graph_and_eager_modes
+  def test_raggedtensor_raises_when_wrong_type(self):
+    x = ragged_factory_ops.constant([[1, 2], [3]])
+    with self.assertRaisesRegex(TypeError, "must be of type.*float32"):
+      check_ops.assert_type(x, dtypes.float32)
 
   def test_raise_when_tf_type_is_not_dtype(self):
     # Test case for GitHub issue:

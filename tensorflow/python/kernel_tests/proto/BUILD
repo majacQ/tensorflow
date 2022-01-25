@@ -7,11 +7,10 @@ load("//tensorflow/core/platform:build_config.bzl", "tf_additional_all_protos", 
 
 package(
     default_visibility = ["//visibility:public"],
-    licenses = ["notice"],  # Apache 2.0
+    licenses = ["notice"],
 )
 
 exports_files([
-    "LICENSE",
     "test_example.proto",
 ])
 
@@ -139,3 +138,11 @@ tf_py_test(
         "//tensorflow/python:proto_ops",
     ],
 )
+
+# copybara:uncomment_begin(google-only)
+# py_proto_library(
+#     name = "test_example_proto_py",
+#     api_version = 2,
+#     deps = [":test_example_proto"],
+# )
+# copybara:uncomment_end

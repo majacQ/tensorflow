@@ -25,7 +25,6 @@ limitations under the License.
 #include "tensorflow/compiler/xla/util.h"
 #include "tensorflow/core/platform/logging.h"
 #include "tensorflow/core/platform/mutex.h"
-#include "tensorflow/core/platform/types.h"
 
 namespace xla {
 
@@ -64,7 +63,7 @@ Status ChannelTracker::RegisterRecv(const ChannelHandle& handle) {
 }
 
 ChannelHandle ChannelTracker::AllocateHandle(ChannelHandle::ChannelType type) {
-  int64 handle_value = next_channel_++;
+  int64_t handle_value = next_channel_++;
   ChannelHandle result;
   result.set_handle(handle_value);
   result.set_type(type);

@@ -16,6 +16,7 @@ limitations under the License.
 #include "tensorflow/lite/delegates/gpu/common/tasks/softmax1x1.h"
 
 #include <string>
+#include <utility>
 
 #include "tensorflow/lite/delegates/gpu/common/status.h"
 #include "tensorflow/lite/delegates/gpu/common/task/util.h"
@@ -47,22 +48,22 @@ std::string Softmax1x1::GetSoftmaxKernelCode(const OperationDef& op_def) {
   args_.AddFloat("mask_w");
 
   std::string c;
-  c += "__kernel void main_function(\n";
-  c += "$0) {\n";
+  c += "MAIN_FUNCTION($0) {\n";
   if (op_def.IsBatchSupported()) {
-    c += "  int batch_id = get_global_id(1);\n";
+    c += "  int batch_id = GLOBAL_ID_1;\n";
     c += "  if (batch_id >= args.dst_tensor.Batch()) return;\n";
     c += "  args.dst_tensor.SetBatchRef(batch_id);\n";
     c += "  args.src_tensor.SetBatchRef(batch_id);\n";
   }
-  c += "  float4 mask = (float4)(args.mask_x, args.mask_y, args.mask_z, "
+  c += "  float4 mask = INIT_FLOAT4v4(args.mask_x, args.mask_y, args.mask_z, "
        "args.mask_w);\n";
-  c += "  float4 maxx4 = (float4)(args.src_tensor.Read<float>(0, 0, 0).x);\n";
-  c += "  int tid = get_local_id(0);\n";
+  c +=
+      "  float4 maxx4 = INIT_FLOAT4(args.src_tensor.Read<float>(0, 0, 0).x);\n";
+  c += "  int tid = LOCAL_ID_0;\n";
   c += "  for (int s = tid; s < args.src_tensor.Slices(); s += 32) {\n";
   c += "    float4 mask_a = s == args.src_tensor.Slices() - 1 ? mask : "
-       "(float4)(1.0f);\n";
-  c += "    float4 mask_b = (float4)(1.0f) - mask_a;\n";
+       "INIT_FLOAT4(1.0f);\n";
+  c += "    float4 mask_b = INIT_FLOAT4(1.0f) - mask_a;\n";
   c += "    float4 src = args.src_tensor.Read<float>(0, 0, s);\n";
   c += "    src = src * mask_a + mask_b * src.x;\n";
   c += "    maxx4 = max(maxx4, src);\n";
@@ -70,54 +71,61 @@ std::string Softmax1x1::GetSoftmaxKernelCode(const OperationDef& op_def) {
   c += "  float maximum = max(maxx4.x, maxx4.y);\n";
   c += "  maximum = max(maximum, maxx4.z);\n";
   c += "  maximum = max(maximum, maxx4.w);\n";
-  c += "  __local float4 tmp[8];\n";
-  c += "  __local float* tmpx1 = (__local float*)tmp;\n";
-  c += "  tmpx1[tid] = maximum;\n";
-  c += "  barrier(CLK_LOCAL_MEM_FENCE);\n";
-  c += "  if (tid == 0) {\n";
-  c += "    maxx4 = max(tmp[0], tmp[1]);\n";
-  c += "    maxx4 = max(maxx4, tmp[2]);\n";
-  c += "    maxx4 = max(maxx4, tmp[3]);\n";
-  c += "    maxx4 = max(maxx4, tmp[4]);\n";
-  c += "    maxx4 = max(maxx4, tmp[5]);\n";
-  c += "    maxx4 = max(maxx4, tmp[6]);\n";
-  c += "    maxx4 = max(maxx4, tmp[7]);\n";
-  c += "    maximum = max(maxx4.x, maxx4.y);\n";
-  c += "    maximum = max(maximum, maxx4.z);\n";
-  c += "    maximum = max(maximum, maxx4.w);\n";
-  c += "    tmpx1[0] = maximum;\n";
+  c += "  __local float loc_mem[32];\n";
+  c += "  loc_mem[tid] = maximum;\n";
+  c += "  LOCAL_MEM_BARRIER;\n";
+  c += "  if (tid % 8 == 0) {\n";
+  c += "    maximum = max(loc_mem[tid], loc_mem[tid + 1]);\n";
+  c += "    maximum = max(maximum, loc_mem[tid + 2]);\n";
+  c += "    maximum = max(maximum, loc_mem[tid + 3]);\n";
+  c += "    maximum = max(maximum, loc_mem[tid + 4]);\n";
+  c += "    maximum = max(maximum, loc_mem[tid + 5]);\n";
+  c += "    maximum = max(maximum, loc_mem[tid + 6]);\n";
+  c += "    maximum = max(maximum, loc_mem[tid + 7]);\n";
+  c += "    loc_mem[tid] = maximum;\n";
   c += "  }\n";
-  c += "  barrier(CLK_LOCAL_MEM_FENCE);\n";
-  c += "  maximum = tmpx1[0];\n";
+  c += "  LOCAL_MEM_BARRIER;\n";
+  c += "  if (tid == 0) {\n";
+  c += "    maximum = max(loc_mem[0], loc_mem[8]);\n";
+  c += "    maximum = max(maximum, loc_mem[16]);\n";
+  c += "    maximum = max(maximum, loc_mem[24]);\n";
+  c += "    loc_mem[0] = maximum;\n";
+  c += "  }\n";
+  c += "  LOCAL_MEM_BARRIER;\n";
+  c += "  maximum = loc_mem[0];\n";
   c += "  float sum = 0.0f;\n";
   c += "  for (int s = tid; s < args.src_tensor.Slices(); s += 32) {\n";
   c += "    float4 mask_temp = s == args.src_tensor.Slices() - 1 ? mask : "
-       "(float4)(1.0f);\n";
+       "INIT_FLOAT4(1.0f);\n";
   c += "    float4 src = args.src_tensor.Read<float>(0, 0, s) - "
-       "(float4)(maximum);\n";
+       "INIT_FLOAT4(maximum);\n";
   c += "    sum += dot(mask_temp, exp(src));\n";
   c += "  }\n";
-  c += "  barrier(CLK_LOCAL_MEM_FENCE);\n";
-  c += "  tmpx1[tid] = sum;\n";
-  c += "  barrier(CLK_LOCAL_MEM_FENCE);\n";
-  c += "  if (tid == 0) {\n";
-  c += "    sum = dot((float4)(1.0f), tmp[0]);\n";
-  c += "    sum += dot((float4)(1.0f), tmp[1]);\n";
-  c += "    sum += dot((float4)(1.0f), tmp[2]);\n";
-  c += "    sum += dot((float4)(1.0f), tmp[3]);\n";
-  c += "    sum += dot((float4)(1.0f), tmp[4]);\n";
-  c += "    sum += dot((float4)(1.0f), tmp[5]);\n";
-  c += "    sum += dot((float4)(1.0f), tmp[6]);\n";
-  c += "    sum += dot((float4)(1.0f), tmp[7]);\n";
-  c += "    tmpx1[0] = 1.0f / sum;\n";
+  c += "  LOCAL_MEM_BARRIER;\n";
+  c += "  loc_mem[tid] = sum;\n";
+  c += "  LOCAL_MEM_BARRIER;\n";
+  c += "  if (tid % 8 == 0) {\n";
+  c += "    sum = loc_mem[tid] + loc_mem[tid + 1];\n";
+  c += "    sum += loc_mem[tid + 2];\n";
+  c += "    sum += loc_mem[tid + 3];\n";
+  c += "    sum += loc_mem[tid + 4];\n";
+  c += "    sum += loc_mem[tid + 5];\n";
+  c += "    sum += loc_mem[tid + 6];\n";
+  c += "    sum += loc_mem[tid + 7];\n";
+  c += "    loc_mem[tid] = sum;\n";
   c += "  }\n";
-  c += "  barrier(CLK_LOCAL_MEM_FENCE);\n";
-  c += "  sum = tmpx1[0];\n";
+  c += "  LOCAL_MEM_BARRIER;\n";
+  c += "  if (tid == 0) {\n";
+  c += "    sum = loc_mem[0] + loc_mem[8] + loc_mem[16] + loc_mem[24];\n";
+  c += "    loc_mem[0] = 1.0f / sum;\n";
+  c += "  }\n";
+  c += "  LOCAL_MEM_BARRIER;\n";
+  c += "  sum = loc_mem[0];\n";
   c += "\n";
-  c += "  int dst_s = get_global_id(0);\n";
+  c += "  int dst_s = GLOBAL_ID_0;\n";
   c += "  if (dst_s < args.dst_tensor.Slices()) {\n";
   c += "    float4 src = args.src_tensor.Read<float>(0, 0, dst_s) - "
-       "(float4)(maximum);\n";
+       "INIT_FLOAT4(maximum);\n";
   c += "    FLT4 res = TO_FLT4(exp(src) * sum);\n";
   c += "    args.dst_tensor.Write(res, 0, 0, dst_s);\n";
   c += "  }\n";

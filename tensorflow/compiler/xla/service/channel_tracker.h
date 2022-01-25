@@ -28,7 +28,6 @@ limitations under the License.
 #include "tensorflow/core/platform/macros.h"
 #include "tensorflow/core/platform/mutex.h"
 #include "tensorflow/core/platform/thread_annotations.h"
-#include "tensorflow/core/platform/types.h"
 
 namespace xla {
 
@@ -48,7 +47,7 @@ class ChannelTracker {
   // as Send or Recv instructions using the channel are requested.
   struct Channel {
     bool has_sender;
-    int64 receiver_count;
+    int64_t receiver_count;
     ChannelHandle::ChannelType type;
   };
 
@@ -80,14 +79,15 @@ class ChannelTracker {
   tensorflow::mutex channel_mutex_;
 
   // The next sequence number to assign to a channel.
-  int64 next_channel_ TF_GUARDED_BY(channel_mutex_);
+  int64_t next_channel_ TF_GUARDED_BY(channel_mutex_);
 
   // Mapping from ChannelHandle value to the corresponding registered
   // Channel object.
-  absl::flat_hash_map<int64, Channel> opaque_to_channel_
+  absl::flat_hash_map<int64_t, Channel> opaque_to_channel_
       TF_GUARDED_BY(channel_mutex_);
 
-  TF_DISALLOW_COPY_AND_ASSIGN(ChannelTracker);
+  ChannelTracker(const ChannelTracker&) = delete;
+  ChannelTracker& operator=(const ChannelTracker&) = delete;
 };
 
 }  // namespace xla
