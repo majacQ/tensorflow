@@ -38,7 +38,7 @@ constexpr char kReplicateSharding[] = "";
 struct TPUResourceReadsWritesPartitioningPass
     : public TF::TPUResourceReadsWritesPartitioningPassBase<
           TPUResourceReadsWritesPartitioningPass> {
-  void runOnFunction() override;
+  void runOnOperation() override;
 };
 
 bool AllResourceTypesHaveSubtypes(TypeRange resources) {
@@ -118,7 +118,7 @@ void PartitionResourceReadsWrites(tf_device::ClusterFuncOp cluster_func) {
     if (!read_var || !read_var.value().hasOneUse()) continue;
     auto partitioned_input = llvm::dyn_cast_or_null<TF::TPUPartitionedInputOp>(
         read_var.resource().getDefiningOp());
-    if (!partitioned_input || !partitioned_input.output().hasOneUse() ||
+    if (!partitioned_input ||
         !AllResourceTypesHaveSubtypes(partitioned_input.inputs().getTypes()))
       continue;
 
@@ -135,13 +135,13 @@ void PartitionResourceReadsWrites(tf_device::ClusterFuncOp cluster_func) {
         partitioned_input._XlaShardingAttr());
     operand.set(partitioned_read);
     read_var->erase();
-    partitioned_input->erase();
+    if (partitioned_input->use_empty()) partitioned_input->erase();
   }
 }
 
-void TPUResourceReadsWritesPartitioningPass::runOnFunction() {
+void TPUResourceReadsWritesPartitioningPass::runOnOperation() {
   llvm::SmallVector<tf_device::ClusterFuncOp, 4> cluster_funcs;
-  getFunction()->walk([&cluster_funcs](tf_device::ClusterFuncOp cluster_func) {
+  getOperation()->walk([&cluster_funcs](tf_device::ClusterFuncOp cluster_func) {
     cluster_funcs.push_back(cluster_func);
   });
   for (tf_device::ClusterFuncOp cluster_func : cluster_funcs)

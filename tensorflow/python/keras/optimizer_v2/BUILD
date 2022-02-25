@@ -11,7 +11,7 @@ package(
         "//tensorflow/python/keras:__subpackages__",
         "//tensorflow/python/training/tracking:__pkg__",
     ],
-    licenses = ["notice"],  # Apache 2.0
+    licenses = ["notice"],
 )
 
 filegroup(
@@ -52,8 +52,8 @@ py_library(
         "//tensorflow/python/distribute:values",
         "//tensorflow/python/keras:backend",
         "//tensorflow/python/keras:backend_config",
-        "//tensorflow/python/keras:initializers",
         "//tensorflow/python/keras/engine:base_layer_utils",
+        "//tensorflow/python/keras/initializers",
         "//tensorflow/python/keras/utils:layer_utils",
         "//tensorflow/python/keras/utils:tf_utils",
     ],
@@ -66,6 +66,7 @@ py_library(
     ],
     srcs_version = "PY3",
     deps = [
+        "//tensorflow/python:array_ops",
         "//tensorflow/python:control_flow_ops",
         "//tensorflow/python:framework",
         "//tensorflow/python:math_ops",
@@ -138,6 +139,7 @@ cuda_py_test(
     srcs = ["adamax_test.py"],
     shard_count = 4,
     # TODO(b/168527439): invalid resource variable reference on GPU for TFRT.
+    tags = ["no_rocm"],
     deps = [
         ":optimizer_v2",
         "//tensorflow/python:client_testlib",
@@ -158,7 +160,6 @@ cuda_py_test(
     size = "medium",
     srcs = ["adadelta_test.py"],
     shard_count = 4,
-    tags = ["no_rocm"],
     # TODO(b/168527439): invalid resource variable reference on GPU for TFRT.
     deps = [
         ":optimizer_v2",
@@ -239,7 +240,6 @@ cuda_py_test(
     srcs = ["optimizer_v2_test.py"],
     shard_count = 8,
     tags = [
-        "no_rocm",
         "no_windows",
     ],
     deps = [
@@ -297,7 +297,6 @@ cuda_py_test(
     size = "medium",
     srcs = ["rmsprop_test.py"],
     shard_count = 2,
-    tags = ["no_rocm"],
     xla_tags = [
         "no_cuda_asan",  # times out
     ],

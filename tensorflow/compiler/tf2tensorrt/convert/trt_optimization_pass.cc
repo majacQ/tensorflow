@@ -16,15 +16,20 @@ limitations under the License.
 
 #include "absl/strings/ascii.h"
 #include "absl/strings/escaping.h"
+#include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
 #include "tensorflow/compiler/tf2tensorrt/convert/convert_graph.h"
+#include "tensorflow/compiler/tf2tensorrt/convert/ops/quantization_ops.h"
+#include "tensorflow/compiler/tf2tensorrt/convert/trt_parameters.h"
 #include "tensorflow/compiler/tf2tensorrt/convert/utils.h"
 #include "tensorflow/core/grappler/clusters/cluster.h"
 #include "tensorflow/core/grappler/grappler_item.h"
 #include "tensorflow/core/grappler/optimizers/custom_graph_optimizer_registry.h"
+#include "tensorflow/core/grappler/utils/functions.h"
 #include "tensorflow/core/lib/strings/numbers.h"
 #include "tensorflow/core/lib/strings/str_util.h"
 #include "tensorflow/core/lib/strings/strcat.h"
+#include "tensorflow/core/platform/casts.h"
 #include "tensorflow/core/platform/logging.h"
 #include "tensorflow/core/platform/stacktrace.h"
 
@@ -36,6 +41,78 @@ namespace convert {
 using absl::AsciiStrToUpper;
 using absl::StrAppend;
 using absl::StrCat;
+
+namespace {
+
+bool ShouldUseExplicitPrecision(const GraphDef& gdef) {
+  if (!IS_TRT_VERSION_GE(8, 0, 0, 0)) {
+    return false;
+  }
+  return absl::c_any_of(gdef.node(), [](const auto& node) {
+    return (absl::c_find(kExplicitQuantizationOpNames, node.op()) !=
+            kExplicitQuantizationOpNames.end());
+  });
+}
+
+StatusOr<bool> ShouldConvertFunction(const grappler::GrapplerItem& item) {
+  if (item.id == "tf_graph") {
+    return false;
+  }
+  const auto& func_item =
+      tensorflow::down_cast<const grappler::GrapplerFunctionItem&>(item);
+  const AttrSlice& attr = func_item.func_attr();
+  const AttrValue* attr_value = attr.FindByString("_tftrt_convert_function");
+  if (attr_value != nullptr) {
+    bool result = false;
+    TF_RETURN_IF_ERROR(GetNodeAttr(attr, "_tftrt_convert_function", &result));
+    return result;
+  }
+  VLOG(1) << "Attribute _tftrt_convert_function was not found.";
+  return false;
+}
+
+// Converts function conversion attributes to conversion parameters.
+Status UpdateFunctionSpecificConversionParams(
+    ConversionParams& cp, const tensorflow::AttrSlice& attr) {
+  auto get_size_attr = [](const AttrSlice& attr, absl::string_view name,
+                          size_t* dst) -> Status {
+    int tmp = 0;
+    TF_RETURN_IF_ERROR(GetNodeAttr(attr, name, &tmp));
+    *dst = static_cast<size_t>(tmp);
+    return Status::OK();
+  };
+
+  TF_RETURN_IF_ERROR(
+      GetNodeAttr(attr, "_tftrt_trt_logger_name", &cp.trt_logger_name));
+  TF_RETURN_IF_ERROR(
+      get_size_attr(attr, "_tftrt_max_batch_size", &cp.max_batch_size));
+  TF_RETURN_IF_ERROR(get_size_attr(attr, "_tftrt_max_workspace_size_bytes",
+                                   &cp.max_workspace_size_bytes));
+  std::string precision_mode;
+  TF_RETURN_IF_ERROR(
+      GetNodeAttr(attr, "_tftrt_precision_mode", &precision_mode));
+  TF_RETURN_IF_ERROR(
+      TrtPrecisionModeFromName(precision_mode, &cp.precision_mode));
+  TF_RETURN_IF_ERROR(GetNodeAttr(attr, "_tftrt_minimum_segment_size",
+                                 &cp.minimum_segment_size));
+  TF_RETURN_IF_ERROR(GetNodeAttr(attr, "_tftrt_is_dyn_op", &cp.is_dyn_op));
+  TF_RETURN_IF_ERROR(
+      GetNodeAttr(attr, "_tftrt_max_cached_engines", &cp.max_cached_engines));
+  TF_RETURN_IF_ERROR(
+      GetNodeAttr(attr, "_tftrt_use_calibration", &cp.use_calibration));
+  TF_RETURN_IF_ERROR(
+      GetNodeAttr(attr, "_tftrt_use_implicit_batch", &cp.use_implicit_batch));
+  std::string profile_strategy;
+  TF_RETURN_IF_ERROR(
+      GetNodeAttr(attr, "_tftrt_profile_strategy", &profile_strategy));
+  TF_RETURN_IF_ERROR(
+      ProfileStrategyFromName(profile_strategy, &cp.profile_strategy));
+  TF_RETURN_IF_ERROR(GetNodeAttr(attr, "_tftrt_allow_build_at_runtime",
+                                 &cp.allow_build_at_runtime));
+  return Status::OK();
+}
+
+}  // namespace
 
 Status TRTOptimizationPass::Init(
     const RewriterConfig_CustomGraphOptimizer* config) {
@@ -75,6 +152,10 @@ Status TRTOptimizationPass::Init(
   }
   if (params.count("use_implicit_batch")) {
     use_implicit_batch_ = params.at("use_implicit_batch").b();
+  }
+  if (params.count("profile_strategy")) {
+    TF_RETURN_IF_ERROR(ProfileStrategyFromName(
+        params.at("profile_strategy").s(), &profile_strategy_));
   }
   return Status::OK();
 }
@@ -182,20 +263,21 @@ void TRTOptimizationPass::PrintDebugInfo(grappler::Cluster* cluster,
   }
 }
 
+static bool ExplicitPrecisionModePolicy() {
+  return IS_TRT_VERSION_GE(8, 0, 0, 0);
+}
+
 Status TRTOptimizationPass::Optimize(grappler::Cluster* cluster,
                                      const grappler::GrapplerItem& item,
                                      GraphDef* optimized_graph) {
-  VLOG(1) << "Called TRTOptimization Pass " << name_;
-  // This is a hack to workaround optimizer issue. MetaOptimizer calls
-  // optimization passes on function objects as well, we should not modify
-  // generated funcdefs! This is fragile but we don't have any other option
-  // until framework fixes it.
-  if (item.id != "tf_graph") {
-    VLOG(1) << "Called TRTOptimization Pass " << name_
-            << " on a grappler item with id=" << item.id
-            << ", which is probably a function object (funcdef). "
-            << "Skipping optimization because TensorRTOptimizer "
-            << "should not be called on function objects.";
+  VLOG(1) << "Called TRTOptimization Pass " << name_
+          << " on a grappler item with id=" << item.id;
+  TF_ASSIGN_OR_RETURN(bool do_function_conversion, ShouldConvertFunction(item));
+  // Optimizing the main graph(identified with `item.id == "tf_graph"`) with
+  // `minimim_segment_size == -1` indicates skipping main graph conversion.
+  if ((minimum_segment_size_ == -1 && item.id == "tf_graph") ||
+      (item.id != "tf_graph" && !do_function_conversion)) {
+    VLOG(1) << "Not optimizing this grappler item: " << item.id;
     *optimized_graph = item.graph;
     return Status::OK();
   }
@@ -205,14 +287,31 @@ Status TRTOptimizationPass::Optimize(grappler::Cluster* cluster,
   }
 
   if (use_calibration_ && precision_mode_ != TrtPrecisionMode::INT8) {
-    VLOG(1) << "Calibration with FP32 or FP16 is not implemented. "
-            << "Falling back to use_calibration = False."
-            << "Note that the default value of use_calibration is True.";
+    LOG(WARNING) << "Calibration with FP32 or FP16 is not implemented. "
+                 << "Falling back to use_calibration = False."
+                 << "Note that the default value of use_calibration is True.";
     use_calibration_ = false;
   }
 
+  const bool use_explicit_precision = ShouldUseExplicitPrecision(item.graph);
+  if (use_explicit_precision) {
+    LOG(INFO) << "[TF-TRT] Using explicit QDQ mode";
+    if (precision_mode_ != TrtPrecisionMode::INT8 || use_calibration_) {
+      LOG(WARNING)
+          << "Explicit precision mode with calibration or FP32/FP16 mode is "
+             "not supported."
+          << " Setting precision mode to INT8 and calibration to false.";
+      precision_mode_ = TrtPrecisionMode::INT8;
+      use_calibration_ = false;
+    }
+  } else {
+    LOG(INFO) << "[TF-TRT] not using explicit QDQ mode";
+  }
+
   std::vector<string> nodes_to_preserve;
-  for (const auto& n : item.NodesToPreserve()) {
+  const auto& old_nodes_to_preserve = item.NodesToPreserve();
+  nodes_to_preserve.reserve(old_nodes_to_preserve.size());
+  for (const auto& n : old_nodes_to_preserve) {
     auto tokens = str_util::Split(n, ":");
     string s = tokens.at(0);
     for (int i = 1; i < tokens.size() - 1; ++i) {
@@ -230,28 +329,33 @@ Status TRTOptimizationPass::Optimize(grappler::Cluster* cluster,
 
   ConversionParams cp;
   cp.grappler_item = &item;
-  cp.output_names = &nodes_to_preserve;
+  cp.input_output_names = &nodes_to_preserve;
   cp.trt_logger_name = trt_logger_name_;
   cp.max_batch_size = maximum_batch_size_;
   cp.max_workspace_size_bytes = max_workspace_size_bytes_;
   cp.output_graph_def = optimized_graph;
   cp.precision_mode = precision_mode_;
   cp.minimum_segment_size = minimum_segment_size_;
-  cp.cluster = cluster;
   cp.is_dyn_op = is_dynamic_op_;
   cp.max_cached_engines = max_cached_batches_;
   cp.use_calibration = use_calibration_;
   cp.use_implicit_batch = use_implicit_batch_;
+  cp.profile_strategy = profile_strategy_;
   cp.allow_build_at_runtime = allow_build_at_runtime_;
-  auto status = ConvertAfterShapes(cp);
+  cp.use_explicit_precision = use_explicit_precision;
+
+  if (item.id != "tf_graph" && do_function_conversion) {
+    const grappler::GrapplerFunctionItem& func_item =
+        tensorflow::down_cast<const grappler::GrapplerFunctionItem&>(item);
+    TF_RETURN_IF_ERROR(
+        UpdateFunctionSpecificConversionParams(cp, func_item.func_attr()));
+    assert(cp.minimum_segment_size > 0);
+  }
+
+  auto status = ConvertAfterShapes(cp, cluster);
   VLOG(1) << "Returning from " << name_;
   return status;
 }
-
-void TRTOptimizationPass::Feedback(grappler::Cluster* cluster,
-                                   const grappler::GrapplerItem& item,
-                                   const GraphDef& optimized_graph,
-                                   double result) {}
 
 class VerboseCustomGraphOptimizerRegistrar
     : public grappler::CustomGraphOptimizerRegistrar {

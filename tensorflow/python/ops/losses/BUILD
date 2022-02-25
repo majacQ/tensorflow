@@ -5,7 +5,7 @@ package(
         "//engedu/ml/tf_from_scratch:__pkg__",
         "//tensorflow:internal",
     ],
-    licenses = ["notice"],  # Apache 2.0
+    licenses = ["notice"],
 )
 
 py_library(
@@ -36,7 +36,7 @@ py_test(
     size = "small",
     srcs = ["util_test.py"],
     python_version = "PY3",
-    srcs_version = "PY2AND3",
+    srcs_version = "PY3",
     deps = [
         ":losses",
         "//tensorflow/python:client_testlib",

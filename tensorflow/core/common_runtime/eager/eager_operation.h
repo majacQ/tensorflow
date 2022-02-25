@@ -37,7 +37,7 @@ namespace tensorflow {
 class EagerOperation : public ImmediateExecutionOperation {
  public:
   explicit EagerOperation(tensorflow::EagerContext* ctx)
-      : ImmediateExecutionOperation(kEager), ctx_(*ctx) {}
+      : ImmediateExecutionOperation(kEager), ctx_(*ctx), is_function_(false) {}
   ~EagerOperation() override {
     for (ImmediateExecutionTensorHandle* h : inputs_) {
       h->Unref();
@@ -54,6 +54,8 @@ class EagerOperation : public ImmediateExecutionOperation {
   const string& Name() const override { return attrs_.op_name(); }
 
   const string& DeviceName() const override { return device_name_; }
+
+  ImmediateExecutionContext* GetContext() const override { return &ctx_; }
 
   const DeviceNameUtils::ParsedName& GetDeviceParsedName() const {
     return device_parsed_name_;
@@ -83,7 +85,11 @@ class EagerOperation : public ImmediateExecutionOperation {
 
   Status AddInput(AbstractTensorHandle* input) override;
   Status AddInputList(absl::Span<AbstractTensorHandle* const> inputs) override;
+  Status SetInput(size_t index, ImmediateExecutionTensorHandle* input) override;
   absl::Span<ImmediateExecutionTensorHandle* const> GetInputs() const override;
+  bool HasCustomDeviceInput() const override {
+    return custom_device_tensor_handles_count_ > 0;
+  }
   Status Execute(absl::Span<AbstractTensorHandle*> retvals,
                  int* num_retvals) override;
   const tensorflow::OpDef* OpDef() const override { return op_def_; };
@@ -121,6 +127,9 @@ class EagerOperation : public ImmediateExecutionOperation {
   Status InputLength(const char* input_name, int* length) override;
   Status OutputLength(const char* output_name, int* length) override;
 
+  const AbstractOpAttrs* GetOpAttrs() const override;
+  void AddAttrs(const AbstractOpAttrs* op_attrs) override;
+
   void SetStackTrace(ManagedStackTrace stack_trace) override {
     stack_trace_ = stack_trace;
   }
@@ -131,8 +140,8 @@ class EagerOperation : public ImmediateExecutionOperation {
 
   Status Reset(const char* op, const char* device_name, bool remote,
                EagerExecutor* executor,
-               const absl::optional<EagerRemoteFunctionParams>
-                   remote_func_params = absl::nullopt);
+               const absl::optional<EagerFunctionParams> remote_func_params =
+                   absl::nullopt);
 
   bool is_function() const { return is_function_; }
   bool colocation_exempt() const { return colocation_exempt_; }
@@ -168,16 +177,39 @@ class EagerOperation : public ImmediateExecutionOperation {
   CancellationManager* GetCancellationManager() const {
     return cancellation_manager_;
   }
-  void SetCancellationManager(CancellationManager* cancellation_manager) {
+  void SetCancellationManager(
+      CancellationManager* cancellation_manager) override {
     cancellation_manager_ = cancellation_manager;
+  }
+
+  // Assign step_id value only if op has valid step id.
+  // When eager_func_params.has_value() returns true, we can directly overwrite
+  // its step id according to Op's step id (if not default value). However, when
+  // eager_func_params.has_value() returns false, we need to first create a new
+  // EagerFuncParams object for it before assigning step_id; otherwise,
+  // directly assigning step_id in this case leaves eager_func_params to be
+  // in a weird state where:
+  // (1) eager_func_params.has_value() returns false, but
+  // (2) eager_func_params->step_id.has_value() returns true.
+  void SetStepId(int64_t step_id) override {
+    assert(is_function());
+    if (step_id != EagerContext::kGlobalRendezvousId) {
+      if (eager_func_params_.has_value()) {
+        eager_func_params_->step_id = step_id;
+      } else {
+        eager_func_params_ = EagerFunctionParams{kInvalidOpId, step_id};
+      }
+    } else {
+      LOG(WARNING) << "SetStepId() should not receive a gloabl rendezvous id.";
+    }
   }
 
   EagerExecutor& Executor() { return *executor_; }
 
   string DebugString() const;
 
-  const absl::optional<EagerRemoteFunctionParams>& remote_func_params() const {
-    return remote_func_params_;
+  const absl::optional<EagerFunctionParams>& eager_func_params() const {
+    return eager_func_params_;
   }
 
   // Op name recorded for memory debugging purpose.
@@ -207,20 +239,14 @@ class EagerOperation : public ImmediateExecutionOperation {
   void InferMixedTypeInputListAttrs(const OpDef::ArgDef& input_def,
                                     const std::vector<DataType>& dtypes);
 
-  // Replaces input tensors placed on custom devices with physical device
-  // equivalents. Used if an op is placed on a physical device but may have
-  // custom device inputs.
-  Status CopyOffCustomDeviceInputs();
-
   tensorflow::EagerContext& ctx_;
   const char* op_name_ = nullptr;
   AttrBuilder attrs_;
   const AttrTypeMap* attr_types_;
 
-  // Toggled to indicate whether all inputs are known to be TensorHandles and
-  // not another type (e.g. custom device tensor handles). Explicitly set to
-  // false when custom device TensorHandles are added.
-  bool inputs_are_tensor_handles_ = true;
+  // The number of custom device TensorHandle inputs. These inputs need to be
+  // processed by CustomDeviceOpHandler first.
+  int custom_device_tensor_handles_count_ = 0;
   absl::InlinedVector<ImmediateExecutionTensorHandle*, 4> inputs_;
 
   // The last device name given to SetDeviceName.
@@ -249,7 +275,8 @@ class EagerOperation : public ImmediateExecutionOperation {
   bool colocation_exempt_;
   CancellationManager* cancellation_manager_ = nullptr;  // Not owned.
   EagerExecutor* executor_;                              // Not owned.
-  absl::optional<EagerRemoteFunctionParams> remote_func_params_;
+
+  absl::optional<EagerFunctionParams> eager_func_params_;
 
   // Inference information
   const tensorflow::OpDef* op_def_;  // op definition from protobuf

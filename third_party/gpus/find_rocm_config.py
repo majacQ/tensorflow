@@ -206,6 +206,28 @@ def _find_rocfft_config(rocm_install_path):
   return rocfft_config
 
 
+def _find_hipfft_config(rocm_install_path):
+
+  def hipfft_version_numbers(path):
+    version_file = os.path.join(path, "hipfft/include/hipfft-version.h")
+    if not os.path.exists(version_file):
+      raise ConfigError(
+          'hipfft version file "{}" not found'.format(version_file))
+    major = _get_header_version(version_file, "hipfftVersionMajor")
+    minor = _get_header_version(version_file, "hipfftVersionMinor")
+    patch = _get_header_version(version_file, "hipfftVersionPatch")
+    return major, minor, patch
+
+  major, minor, patch = hipfft_version_numbers(rocm_install_path)
+
+  hipfft_config = {
+      "hipfft_version_number":
+          _get_composite_version_number(major, minor, patch)
+  }
+
+  return hipfft_config
+
+
 def _find_roctracer_config(rocm_install_path):
 
   def roctracer_version_numbers(path):
@@ -251,6 +273,28 @@ def _find_hipsparse_config(rocm_install_path):
   return hipsparse_config
 
 
+def _find_hipsolver_config(rocm_install_path):
+
+  def hipsolver_version_numbers(path):
+    version_file = os.path.join(path, "hipsolver/include/hipsolver-version.h")
+    if not os.path.exists(version_file):
+      raise ConfigError(
+          'hipsolver version file "{}" not found'.format(version_file))
+    major = _get_header_version(version_file, "hipsolverVersionMajor")
+    minor = _get_header_version(version_file, "hipsolverVersionMinor")
+    patch = _get_header_version(version_file, "hipsolverVersionPatch")
+    return major, minor, patch
+
+  major, minor, patch = hipsolver_version_numbers(rocm_install_path)
+
+  hipsolver_config = {
+      "hipsolver_version_number":
+          _get_composite_version_number(major, minor, patch)
+  }
+
+  return hipsolver_config
+
+
 def _find_rocsolver_config(rocm_install_path):
 
   def rocsolver_version_numbers(path):
@@ -289,8 +333,12 @@ def find_rocm_config():
   result.update(_find_rocblas_config(rocm_install_path))
   result.update(_find_rocrand_config(rocm_install_path))
   result.update(_find_rocfft_config(rocm_install_path))
+  if result["rocm_version_number"] >= 40100:
+    result.update(_find_hipfft_config(rocm_install_path))
   result.update(_find_roctracer_config(rocm_install_path))
   result.update(_find_hipsparse_config(rocm_install_path))
+  if result["rocm_version_number"] >= 40500:
+    result.update(_find_hipsolver_config(rocm_install_path))
   result.update(_find_rocsolver_config(rocm_install_path))
 
   return result

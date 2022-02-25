@@ -42,6 +42,10 @@ int TfLiteTypeToPyArrayType(TfLiteType tf_lite_type) {
       return NPY_FLOAT64;
     case kTfLiteInt32:
       return NPY_INT32;
+    case kTfLiteUInt32:
+      return NPY_UINT32;
+    case kTfLiteUInt16:
+      return NPY_UINT16;
     case kTfLiteInt16:
       return NPY_INT16;
     case kTfLiteUInt8:
@@ -60,6 +64,9 @@ int TfLiteTypeToPyArrayType(TfLiteType tf_lite_type) {
       return NPY_COMPLEX64;
     case kTfLiteComplex128:
       return NPY_COMPLEX128;
+    case kTfLiteResource:
+    case kTfLiteVariant:
+      return NPY_OBJECT;
     case kTfLiteNoType:
       return NPY_NOTYPE;
       // Avoid default so compiler errors created when new types are made.
@@ -77,6 +84,8 @@ TfLiteType TfLiteTypeFromPyType(int py_type) {
       return kTfLiteFloat64;
     case NPY_INT32:
       return kTfLiteInt32;
+    case NPY_UINT32:
+      return kTfLiteUInt32;
     case NPY_INT16:
       return kTfLiteInt16;
     case NPY_UINT8:
@@ -111,7 +120,7 @@ bool FillStringBufferFromPyUnicode(PyObject* value,
                                    DynamicBuffer* dynamic_buffer) {
   Py_ssize_t len = -1;
   const char* buf = PyUnicode_AsUTF8AndSize(value, &len);
-  if (buf == NULL) {
+  if (buf == nullptr) {
     PyErr_SetString(PyExc_ValueError, "PyUnicode_AsUTF8AndSize() failed.");
     return false;
   }

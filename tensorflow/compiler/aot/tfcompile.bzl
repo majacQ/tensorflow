@@ -312,12 +312,18 @@ def tf_library(
             # TODO(cwhipkey): only depend on kernel code that the model actually
             # needed.
             "//tensorflow/compiler/xla/service/cpu:runtime_conv2d",
+            "//tensorflow/compiler/xla/service/cpu:runtime_custom_call_status",
             "//tensorflow/compiler/xla/service/cpu:runtime_key_value_sort",
             "//tensorflow/compiler/xla/service/cpu:runtime_matmul",
+            "//tensorflow/compiler/xla/service/cpu:runtime_topk",
             "//tensorflow/compiler/xla/service/cpu:runtime_single_threaded_conv2d",
             "//tensorflow/compiler/xla/service/cpu:runtime_single_threaded_matmul",
             "//third_party/eigen3",
-        ] or []) + (deps or []),
+        ] or []) + (
+            mlir_components.count("HloLowering") > 0 and [
+                "@llvm-project//mlir:mlir_c_runner_utils",
+            ] or []
+        ) + (deps or []),
         tags = tags,
     )
 
@@ -436,5 +442,6 @@ def target_llvm_triple():
         "//tensorflow:macos_arm64": "aarch64-none-darwin",
         "//tensorflow:windows": "x86_64-none-windows",
         "//tensorflow:linux_s390x": "systemz-none-linux-gnu",
+        # internal placeholder,
         "//conditions:default": "x86_64-pc-linux",
     })

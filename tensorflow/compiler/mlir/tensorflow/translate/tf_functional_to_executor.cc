@@ -20,6 +20,7 @@ limitations under the License.
 #include "mlir/Pass/Pass.h"  // from @llvm-project
 #include "mlir/Pass/PassRegistry.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_executor.h"
+#include "tensorflow/compiler/mlir/tensorflow/transforms/passes_detail.h"
 
 #define DEBUG_TYPE "tf-functional-to-executor"
 
@@ -40,19 +41,22 @@ namespace {
 //      return %graph_results#...
 //    }
 struct FunctionalToExecutorDialectConversion
-    : public PassWrapper<FunctionalToExecutorDialectConversion, FunctionPass> {
-  void runOnFunction() override;
+    : public TF::FunctionalToExecutorDialectConversionPassBase<
+          FunctionalToExecutorDialectConversion> {
+  void runOnOperation() override;
 };
 }  // end anonymous namespace
 
-void FunctionalToExecutorDialectConversion::runOnFunction() {
-  if (!llvm::hasSingleElement(getFunction())) {
+void FunctionalToExecutorDialectConversion::runOnOperation() {
+  auto func = getOperation();
+  if (func.isExternal()) return;
+  if (!llvm::hasSingleElement(func)) {
     LLVM_DEBUG(llvm::dbgs() << "Expect single block function, skip conversion "
                                "to tf_executor dialect\n");
     return;
   }
-  auto loc = getFunction().getLoc();
-  mlir::Block& body = getFunction().front();
+  auto loc = func.getLoc();
+  mlir::Block& body = func.front();
   // Find region of interest and ReturnOp.
   auto copy_range = body.without_terminator();
   if (copy_range.begin() != copy_range.end() &&
@@ -69,12 +73,12 @@ void FunctionalToExecutorDialectConversion::runOnFunction() {
   }
   // Build GraphOp.
   OpBuilder builder(&body, body.begin());
-  auto graph_op = builder.create<tf_executor::GraphOp>(
-      loc, getFunction().getType().getResults());
+  auto graph_op =
+      builder.create<tf_executor::GraphOp>(loc, func.getType().getResults());
   graph_op.body().push_back(new Block);
   builder.setInsertionPointToEnd(&graph_op.GetBody());
   auto island = builder.create<tf_executor::IslandOp>(
-      loc, getFunction().getType().getResults(),
+      loc, func.getType().getResults(),
       tf_executor::ControlType::get(&getContext()), ArrayRef<Value>());
   // Create Fetch.
   ValueRange to_fetch = island.getResults();
@@ -101,7 +105,3 @@ CreateFunctionalToExecutorDialectConversionPass() {
 }
 
 }  // namespace mlir
-
-static mlir::PassRegistration<mlir::FunctionalToExecutorDialectConversion> pass(
-    "tf-functional-to-executor-conversion",
-    "Transform from func op to TF executor dialect.");

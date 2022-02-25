@@ -8,7 +8,7 @@ load("//tensorflow:tensorflow.bzl", "tf_python_pybind_extension")
 
 package(
     default_visibility = ["//tensorflow:internal"],
-    licenses = ["notice"],  # Apache 2.0
+    licenses = ["notice"],
 )
 
 tf_python_pybind_extension(
@@ -155,5 +155,15 @@ cuda_py_test(
         ":tape",
         "//tensorflow/python:client_testlib",
         "@absl_py//absl/testing:parameterized",
+    ],
+)
+
+cuda_py_test(
+    name = "graph_building_test",
+    size = "small",
+    srcs = ["graph_building_test.py"],
+    deps = [
+        "//tensorflow/core/config:flags_py",
+        "//tensorflow/python:client_testlib",
     ],
 )

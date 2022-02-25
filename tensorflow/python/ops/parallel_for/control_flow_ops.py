@@ -15,10 +15,6 @@
 """for_loop and pfor ops."""
 # pylint: disable=g-direct-tensorflow-import
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import functools
 
 from tensorflow.python.eager import context
@@ -34,7 +30,6 @@ from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import control_flow_ops
 from tensorflow.python.ops import math_ops
 from tensorflow.python.ops import tensor_array_ops
-from tensorflow.python.ops.numpy_ops import np_arrays
 from tensorflow.python.ops.parallel_for.pfor import PFor
 from tensorflow.python.ops.parallel_for.pfor import PForConfig
 from tensorflow.python.platform import tf_logging as logging
@@ -73,9 +68,9 @@ def for_loop(loop_fn, loop_fn_dtypes, iters, parallel_iterations=None):
     fn_output = nest.flatten(loop_fn(i))
     if len(fn_output) != len(flat_loop_fn_dtypes):
       raise ValueError(
-          "Number of expected outputs, %d, does not match the number of "
-          "actual outputs, %d, from loop_fn" % (len(flat_loop_fn_dtypes),
-                                                len(fn_output)))
+          f"Number of expected outputs {len(flat_loop_fn_dtypes)}, does not "
+          f"match the number of actual outputs {len(fn_output)} from loop_fn: "
+          f"{loop_fn} with output {fn_output}.")
     outputs = []
     del is_none_list[:]
     is_none_list.extend(x is None for x in fn_output)
@@ -223,10 +218,9 @@ def _composite_to_tensors(value, is_batched=False):
   if _should_expand_composite(value):
     spec = value._type_spec
     if not isinstance(spec, type_spec.BatchableTypeSpec):
-      raise ValueError("CompositeTensor instance {} returned from "
+      raise ValueError(f"CompositeTensor instance {value} returned from "
                        "parallel_for or vectorized_map loop body must provide "
-                       "a `BatchableTypeSpec` (saw: {}).".format(
-                           value, spec))
+                       f"a `BatchableTypeSpec` (saw: {spec}).")
     if is_batched:
       return spec._to_batched_tensor_list(value)
     return spec._to_tensor_list(value)
@@ -259,7 +253,7 @@ def _loop_fn_has_config(loop_fn):
   else:
     loop_class = tf_decorator.unwrap(loop_fn)[1]
     if not hasattr(loop_class, "__call__"):
-      raise ValueError("loop_fn object did not have a __call__ method")
+      raise ValueError("`loop_fn` object did not have a __call__ method")
     argspec = tf_inspect.getargspec(loop_class.__call__)
     return PFOR_CONFIG_ARG in argspec.args
 
@@ -289,7 +283,6 @@ def _pfor_impl(loop_fn,
                                                 loop_fn_outputs)
 
   # Convert outputs to Tensor if needed.
-  rewrap_as_ndarray = False
   tmp_loop_fn_outputs = []
   for loop_fn_output in nest.flatten(loop_fn_output_tensors):
     if (loop_fn_output is not None and not isinstance(
@@ -301,9 +294,6 @@ def _pfor_impl(loop_fn,
                      " IndexedSlices separately, and handle the vectorized"
                      " outputs directly." % loop_fn_output)
         loop_fn_output = ops.convert_to_tensor(loop_fn_output)
-      elif isinstance(loop_fn_output, np_arrays.ndarray):
-        loop_fn_output = loop_fn_output.data
-        rewrap_as_ndarray = True
       else:
         loop_fn_output = ops.convert_to_tensor(loop_fn_output)
     tmp_loop_fn_outputs.append(loop_fn_output)
@@ -314,9 +304,12 @@ def _pfor_impl(loop_fn,
   iters = ops.convert_to_tensor(iters)
   if parallel_iterations is not None:
     if parallel_iterations < 1:
-      raise ValueError("parallel_iterations must be None or a positive integer")
+      raise ValueError(
+          "Argument `parallel_iterations` must be None or a positive integer. "
+          f"Received: {parallel_iterations}.")
     if parallel_iterations == 1:
-      raise ValueError("Found parallel_iterations == 1. Use for_loop instead.")
+      raise ValueError(
+          "Found `parallel_iterations == 1`. Use `for_loop` instead.")
     if iters_value is not None and iters_value < parallel_iterations:
       parallel_iterations = None
   if parallel_iterations is None:
@@ -327,13 +320,11 @@ def _pfor_impl(loop_fn,
       flattened_output_tensors = []
       for loop_fn_output in nest.flatten(loop_fn_output_tensors):
         output = converter.convert(loop_fn_output)
-        if rewrap_as_ndarray:
-          output = np_arrays.tensor_to_ndarray(output)
         flattened_output_tensors.append(output)
   else:
     if pfor_config is not None and pfor_config._has_reductions():  # pylint: disable=protected-access
-      raise ValueError("Setting parallel_iterations currently unsupported if"
-                       " reductions across iterations are performed.")
+      raise ValueError("Setting `parallel_iterations` currently unsupported if "
+                       "reductions across iterations are performed.")
     num_tiled_iterations = iters // parallel_iterations
     num_remaining_iterations = iters % parallel_iterations
     # TODO(agarwal): Avoid calling loop_fn twice. Generate the loop body inside
@@ -346,8 +337,6 @@ def _pfor_impl(loop_fn,
       flattened_output_tensors = nest.flatten(loop_fn_output_tensors)
       for loop_fn_output in flattened_output_tensors:
         output = converter.convert(loop_fn_output)
-        if rewrap_as_ndarray:
-          output = np_arrays.tensor_to_ndarray(output)
         remaining_output_tensors.append(output)
 
     with ops.name_scope("pfor_tiled"):
@@ -398,10 +387,6 @@ def _pfor_impl(loop_fn,
             tensor_shape.TensorShape([iters_value]).concatenate(
                 original_output.shape))
 
-      if rewrap_as_ndarray:
-        flattened_output_tensors = [
-            np_arrays.tensor_to_ndarray(x) for x in flattened_output_tensors]
-
   return nest.map_structure_up_to(
       loop_fn_outputs,
       functools.partial(_composite_from_tensors, batch_size=iters_value),
@@ -418,8 +403,6 @@ def _broadcasting_gather(x, i):
   elif static_first_dim is None:
     i = array_ops.where_v2(array_ops.shape(x)[0] > 1, i, 0)
   result = array_ops.gather(x, i)
-  if isinstance(x, np_arrays.ndarray):
-    result = np_arrays.ndarray.from_tensor(result)
   return result
 
 
@@ -548,13 +531,11 @@ def vectorized_map(fn, elems, fallback_to_while_loop=True):
                             is_batched=True),
           elems))
   def _get_shape(x):
-    if isinstance(x, np_arrays.ndarray):
-      x = x.data
     if x.shape.rank is None:
       return None
     return x.shape.as_list()[0]
   static_first_dims = [_get_shape(elem) for elem in flat_elems]
-  if any([s is None for s in static_first_dims]):
+  if any(s is None for s in static_first_dims):
     batch_size = math_ops.reduce_max(
         [array_ops.shape(elem)[0] for elem in flat_elems])
   else:

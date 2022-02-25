@@ -14,10 +14,6 @@
 # ==============================================================================
 """Tests for TPU Embeddings mid level API on TPU."""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import functools
 import os
 
@@ -40,6 +36,7 @@ from tensorflow.python.framework import dtypes
 from tensorflow.python.framework import ops
 from tensorflow.python.framework import sparse_tensor
 from tensorflow.python.framework import tensor_spec
+from tensorflow.python.framework.tensor_shape import TensorShape
 from tensorflow.python.module import module
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import gen_math_ops
@@ -55,6 +52,7 @@ from tensorflow.python.tpu import tpu_embedding
 from tensorflow.python.tpu import tpu_embedding_v2
 from tensorflow.python.tpu import tpu_embedding_v2_utils
 from tensorflow.python.tpu import tpu_strategy_util
+from tensorflow.python.tpu.ops import tpu_ops
 from tensorflow.python.training import checkpoint_utils
 from tensorflow.python.training.tracking import util
 from tensorflow.python.util import nest
@@ -68,6 +66,12 @@ flags.DEFINE_string('model_dir', os.environ.get('TEST_TMPDIR'),
 
 
 class TPUEmbeddingCheckpointTest(parameterized.TestCase, test.TestCase):
+
+  def skip_if_oss(self):
+    if FLAGS.project is not None or FLAGS.zone is not None:
+      self.skipTest(
+          'Skipping tests for oss as it is slow to run every test in cloud tpu.'
+      )
 
   def setUp(self):
     super(TPUEmbeddingCheckpointTest, self).setUp()
@@ -163,6 +167,7 @@ class TPUEmbeddingCheckpointTest(parameterized.TestCase, test.TestCase):
     # This test works right now because we only have one TPU host in the unit
     # environment. Initializing from checkpoint does not understand how to
     # pass the sharding info to the restore op right now.
+    self.skip_if_oss()
 
     class TestModule(module.Module):
 
@@ -238,6 +243,9 @@ class TPUEmbeddingCheckpointTest(parameterized.TestCase, test.TestCase):
     if not initialize_tpu_embedding:
       saved_fn = tpu.initialize_system_for_tpu_embedding
       tpu.initialize_system_for_tpu_embedding = lambda x: None
+      # Also disable the tpu embedding initialization checking.
+      saved_fn_two = tpu_ops.is_tpu_embedding_initialized
+      tpu_ops.is_tpu_embedding_initialized = lambda: False
 
     # batch_size here does not matter as we aren't training in any of these
     # tests.
@@ -245,6 +253,7 @@ class TPUEmbeddingCheckpointTest(parameterized.TestCase, test.TestCase):
 
     if not initialize_tpu_embedding:
       tpu.initialize_system_for_tpu_embedding = saved_fn
+      tpu_ops.is_tpu_embedding_initialized = saved_fn_two
 
     return mid_level
 
@@ -302,11 +311,14 @@ class TPUEmbeddingCheckpointTest(parameterized.TestCase, test.TestCase):
 
   @parameterized.parameters(tpu_embedding_v2_utils.SGD,
                             tpu_embedding_v2_utils.Adagrad,
-                            tpu_embedding_v2_utils.Adam)
+                            tpu_embedding_v2_utils.Adam,
+                            tpu_embedding_v2_utils.FTRL)
   def test_check_checkpoint_variable_names_are_same_on_cpu_and_tpu(self,
                                                                    optimizer):
     # Reinitialize the TPU so that we can re-initialize the embeddings with the
     # given optimizer.
+    if optimizer != tpu_embedding_v2_utils.SGD:
+      self.skip_if_oss()
     tpu_strategy_util.initialize_tpu_system(self.resolver)
     optimizer = optimizer(learning_rate=0.1)
 
@@ -329,6 +341,12 @@ class TPUEmbeddingCheckpointTest(parameterized.TestCase, test.TestCase):
 
 
 class TPUEmbeddingTest(parameterized.TestCase, test.TestCase):
+
+  def skip_if_oss(self):
+    if FLAGS.project is not None or FLAGS.zone is not None:
+      self.skipTest(
+          'Skipping tests for oss as it is slow to run every test in cloud tpu.'
+      )
 
   def setUp(self):
     super(TPUEmbeddingTest, self).setUp()
@@ -432,36 +450,38 @@ class TPUEmbeddingTest(parameterized.TestCase, test.TestCase):
     # matter.
     mid_level_api.build(64)
 
+    # Test pass non tensor to apply_gradients.
     @def_function.function
-    def test_apply():
+    def test_apply_1():
       mid_level_api.apply_gradients((1, 2, 3))
 
-    with self.assertRaisesRegex(ValueError, 'Expected Tensor.'):
-      strategy.run(test_apply)
+    with self.assertRaisesRegex(ValueError, 'found non-tensor type'):
+      strategy.run(test_apply_1)
 
-  def test_pass_different_structure_to_apply_gradients(self):
-    strategy, mid_level_api, _ = self._create_strategy_and_mid_level('sgd')
-    # We aren't going to actually run anything, so the batch_size here does not
-    # matter.
-    mid_level_api.build(64)
+    # Test pass different structure to apply_gradients.
     @def_function.function
-    def test_apply():
+    def test_apply_2():
       # This should be a tuple as feature_config is a tuple of 3 configs.
       mid_level_api.apply_gradients([1, 2, 3])
 
     with self.assertRaisesRegex(
-        TypeError,
-        'The two structures don\'t have the same nested structure.'):
-      strategy.run(test_apply)
+        TypeError, 'The two structures don\'t have the same nested structure.'):
+      strategy.run(test_apply_2)
 
   def test_pass_none_to_apply_gradients(self):
     strategy, mid_level_api, _ = self._create_strategy_and_mid_level('sgd')
-    mid_level_api.build(self.batch_size)
+    mid_level_api.build([
+        TensorShape((self.batch_size, 2)),
+        TensorShape((self.batch_size, 2)),
+        TensorShape((self.batch_size, 3))
+    ])
     dataset = self._create_sparse_dataset(strategy)
-    data = next(iter(strategy.experimental_distribute_dataset(
-        dataset,
-        options=distribute_lib.InputOptions(
-            experimental_prefetch_to_device=False))))
+    data = next(
+        iter(
+            strategy.experimental_distribute_dataset(
+                dataset,
+                options=distribute_lib.InputOptions(
+                    experimental_fetch_to_device=False))))
 
     @def_function.function
     def embedding_and_set_gradients(data):
@@ -511,13 +531,12 @@ class TPUEmbeddingTest(parameterized.TestCase, test.TestCase):
     self.num_replicas = strategy.num_replicas_in_sync
     return strategy
 
-  def test_dequeue_on_cpu(self):
+  def test_enqueue_dequeue_apply_gradients_on_cpu(self):
+    # Dequeue on CPU.
     mid_level_api = self._create_mid_level()
     with self.assertRaises(RuntimeError):
       mid_level_api.dequeue()
-
-  def test_enqueue_on_cpu(self):
-    mid_level_api = self._create_mid_level()
+    # Enqueue on CPU.
     features = {
         'watched': sparse_tensor.SparseTensor(
             indices=self.feature_watched_indices,
@@ -525,11 +544,10 @@ class TPUEmbeddingTest(parameterized.TestCase, test.TestCase):
             dense_shape=[2, 2])}
     with self.assertRaises(RuntimeError):
       mid_level_api.enqueue(features)
-
-  def test_apply_gradients_on_cpu(self):
+    # Apply gradient on CPU.
     mid_level_api = self._create_mid_level()
     with self.assertRaises(RuntimeError):
-      mid_level_api.enqueue(None)
+      mid_level_api.apply_gradients(None)
 
   def test_get_embedding_tables_on_cpu(self):
     mid_level_api = self._create_mid_level()
@@ -549,8 +567,7 @@ class TPUEmbeddingTest(parameterized.TestCase, test.TestCase):
     input_fn = self._create_dense_input_fn(strategy, include_weights=True)
     dist = strategy.distribute_datasets_from_function(
         input_fn,
-        options=distribute_lib.InputOptions(
-            experimental_prefetch_to_device=False))
+        options=distribute_lib.InputOptions(experimental_fetch_to_device=False))
     dist_iter = iter(dist)
 
     @def_function.function
@@ -565,75 +582,65 @@ class TPUEmbeddingTest(parameterized.TestCase, test.TestCase):
     with self.assertRaisesRegex(ValueError, 'Weight specified for dense input'):
       test_fn()
 
-  def test_enqueue_wrong_weight_type_for_sparse_tensor(self):
+  def test_enqueue_wrong_weight_type_for_sparse_and_ragged_tensor(self):
     strategy, mid_level_api, _ = self._create_strategy_and_mid_level('sgd')
 
-    sparse = self._create_sparse_dataset(strategy)
+    sparse = self._create_sparse_dataset(strategy, include_weights=True)
     ragged = self._create_ragged_dataset(strategy, include_weights=True)
-    sparse_iter = iter(strategy.experimental_distribute_dataset(
-        sparse,
-        options=distribute_lib.InputOptions(
-            experimental_prefetch_to_device=False)))
-    ragged_iter = iter(strategy.experimental_distribute_dataset(
-        ragged,
-        options=distribute_lib.InputOptions(
-            experimental_prefetch_to_device=False)))
+    sparse_iter = iter(
+        strategy.experimental_distribute_dataset(
+            sparse,
+            options=distribute_lib.InputOptions(
+                experimental_fetch_to_device=False)))
+    ragged_iter = iter(
+        strategy.experimental_distribute_dataset(
+            ragged,
+            options=distribute_lib.InputOptions(
+                experimental_fetch_to_device=False)))
 
     @def_function.function
-    def test_fn():
+    def test_sparse_fn():
       def step():
         return mid_level_api.dequeue()
 
-      features = next(sparse_iter)
+      features, _ = next(sparse_iter)
       _, weights = next(ragged_iter)
       mid_level_api.enqueue(features, weights=weights, training=False)
       return strategy.run(step)
 
     with self.assertRaisesRegex(
         ValueError, 'which does not match type input which is SparseTensor.'):
-      test_fn()
-
-  def test_enqueue_wrong_weight_type_for_ragged_tensor(self):
-    strategy, mid_level_api, _ = self._create_strategy_and_mid_level('sgd')
-
-    sparse = self._create_sparse_dataset(strategy, include_weights=True)
-    ragged = self._create_ragged_dataset(strategy)
-    sparse_iter = iter(strategy.experimental_distribute_dataset(
-        sparse,
-        options=distribute_lib.InputOptions(
-            experimental_prefetch_to_device=False)))
-    ragged_iter = iter(strategy.experimental_distribute_dataset(
-        ragged,
-        options=distribute_lib.InputOptions(
-            experimental_prefetch_to_device=False)))
+      test_sparse_fn()
 
     @def_function.function
-    def test_fn():
+    def test_ragged_fn():
       def step():
         return mid_level_api.dequeue()
 
       _, weights = next(sparse_iter)
-      features = next(ragged_iter)
+      features, _ = next(ragged_iter)
       mid_level_api.enqueue(features, weights=weights, training=False)
       return strategy.run(step)
 
     with self.assertRaisesRegex(
         ValueError, 'which does not match type input which is RaggedTensor.'):
-      test_fn()
+      test_ragged_fn()
 
   def test_enqueue_sparse_and_ragged(self):
     strategy, mid_level_api, _ = self._create_strategy_and_mid_level('sgd')
 
     sparse = self._create_sparse_dataset(strategy)
     ragged = self._create_ragged_dataset(strategy)
-    sparse_iter = iter(strategy.experimental_distribute_dataset(
-        sparse,
-        options=distribute_lib.InputOptions(
-            experimental_prefetch_to_device=False)))
-    ragged_iter = iter(strategy.experimental_distribute_dataset(
-        ragged,
-        options=distribute_lib.InputOptions(
-            experimental_prefetch_to_device=False)))
+    sparse_iter = iter(
+        strategy.experimental_distribute_dataset(
+            sparse,
+            options=distribute_lib.InputOptions(
+                experimental_fetch_to_device=False)))
+    ragged_iter = iter(
+        strategy.experimental_distribute_dataset(
+            ragged,
+            options=distribute_lib.InputOptions(
+                experimental_fetch_to_device=False)))
 
     @def_function.function
     def test_fn():
@@ -646,21 +653,20 @@ class TPUEmbeddingTest(parameterized.TestCase, test.TestCase):
       mid_level_api.enqueue(features, training=False)
       return strategy.run(step)
 
-    with self.assertRaisesRegex(
-        ValueError, 'Found both SparseTensors and RaggedTensors'):
-      test_fn()
+    test_fn()
 
-  def test_enqueue_incorrect_structure_for_features(self):
+  def test_enqueue_incorrect_structure_for_features_and_weights(self):
     strategy, mid_level_api, _ = self._create_strategy_and_mid_level('sgd')
 
-    sparse = self._create_sparse_dataset(strategy)
-    sparse_iter = iter(strategy.experimental_distribute_dataset(
-        sparse,
-        options=distribute_lib.InputOptions(
-            experimental_prefetch_to_device=False)))
+    sparse = self._create_sparse_dataset(strategy, include_weights=True)
+    sparse_iter = iter(
+        strategy.experimental_distribute_dataset(
+            sparse,
+            options=distribute_lib.InputOptions(
+                experimental_fetch_to_device=False)))
 
     @def_function.function
-    def test_fn():
+    def test_features_fn():
       def step():
         return mid_level_api.dequeue()
 
@@ -671,19 +677,10 @@ class TPUEmbeddingTest(parameterized.TestCase, test.TestCase):
 
     # The error here is raised from nest.assert_same_structure
     with self.assertRaises(ValueError):
-      test_fn()
-
-  def test_enqueue_incorrect_structure_for_weights(self):
-    strategy, mid_level_api, _ = self._create_strategy_and_mid_level('sgd')
-
-    sparse = self._create_sparse_dataset(strategy, include_weights=True)
-    sparse_iter = iter(strategy.experimental_distribute_dataset(
-        sparse,
-        options=distribute_lib.InputOptions(
-            experimental_prefetch_to_device=False)))
+      test_features_fn()
 
     @def_function.function
-    def test_fn():
+    def test_weights_fn():
       def step():
         return mid_level_api.dequeue()
 
@@ -694,21 +691,23 @@ class TPUEmbeddingTest(parameterized.TestCase, test.TestCase):
 
     # The error here is raised from nest.assert_same_structure
     with self.assertRaises(ValueError):
-      test_fn()
+      test_weights_fn()
 
   def test_enqueue_ragged_tensor(self):
     strategy, mid_level_api, _ = self._create_strategy_and_mid_level('sgd')
 
     sparse = self._create_sparse_dataset(strategy)
     ragged = self._create_ragged_dataset(strategy)
-    sparse_iter = iter(strategy.experimental_distribute_dataset(
-        sparse,
-        options=distribute_lib.InputOptions(
-            experimental_prefetch_to_device=False)))
-    ragged_iter = iter(strategy.experimental_distribute_dataset(
-        ragged,
-        options=distribute_lib.InputOptions(
-            experimental_prefetch_to_device=False)))
+    sparse_iter = iter(
+        strategy.experimental_distribute_dataset(
+            sparse,
+            options=distribute_lib.InputOptions(
+                experimental_fetch_to_device=False)))
+    ragged_iter = iter(
+        strategy.experimental_distribute_dataset(
+            ragged,
+            options=distribute_lib.InputOptions(
+                experimental_fetch_to_device=False)))
 
     @def_function.function
     def test_fn():
@@ -731,6 +730,50 @@ class TPUEmbeddingTest(parameterized.TestCase, test.TestCase):
     ragged0 = self._get_replica_numpy(ragged_activations, strategy, 0)
     self.assertAllClose(sparse0, ragged0)
 
+  def test_enqueue_per_device(self):
+    strategy, mid_level_api, _ = self._create_strategy_and_mid_level('sgd')
+
+    sparse = self._create_sparse_dataset(strategy)
+    sparse_iter = iter(
+        strategy.experimental_distribute_dataset(
+            sparse,
+            options=distribute_lib.InputOptions(
+                experimental_fetch_to_device=False)))
+
+    @def_function.function
+    def test_fn():
+      def get_activations(dense_value):
+        return mid_level_api.dequeue(), dense_value
+
+      sparse_features = next(sparse_iter)
+      mid_level_api.enqueue(sparse_features, training=False)
+      activations, dense_value1 = strategy.run(get_activations, args=(0.0,))
+
+      def enqueue_fn(ctx):
+        core_id = ctx.replica_id_in_sync_group
+        device = strategy.extended.worker_devices[core_id]
+        sparse_features_local = nest.map_structure(
+            lambda x: strategy.experimental_local_results(x)[core_id],
+            sparse_features)
+        mid_level_api.enqueue(sparse_features_local, training=False,
+                              device=device)
+        return 0.0
+
+      data = strategy.experimental_distribute_values_from_function(
+          enqueue_fn)
+      per_device_activations, dense_value2 = strategy.run(get_activations,
+                                                          args=(data,))
+      return activations, per_device_activations, dense_value1, dense_value2
+
+    activations, per_device_activations, _, _ = test_fn()
+
+    # Extact per core numpy arrays and check that both sparse and ragged have
+    # the same results.
+    activations0 = self._get_replica_numpy(activations, strategy, 0)
+    per_device_activations0 = self._get_replica_numpy(
+        per_device_activations, strategy, 0)
+    self.assertAllClose(activations0, per_device_activations0)
+
   def test_enqueue_cpu_tensor(self):
     strategy, mid_level_api, _ = self._create_strategy_and_mid_level('sgd')
 
@@ -752,6 +795,7 @@ class TPUEmbeddingTest(parameterized.TestCase, test.TestCase):
 
   @parameterized.parameters([True, False])
   def test_enqueue_cpu_tensor_with_outside_compilation(self, use_mlir):
+
     if use_mlir:
       config.enable_mlir_bridge()
 
@@ -774,6 +818,7 @@ class TPUEmbeddingTest(parameterized.TestCase, test.TestCase):
 
   @parameterized.parameters(True, False)
   def test_enqueue_with_weights(self, ragged):
+    self.skip_if_oss()
     strategy, mid_level_api, _ = self._create_strategy_and_mid_level('sgd')
     weight = 0.5
     if ragged:
@@ -782,12 +827,17 @@ class TPUEmbeddingTest(parameterized.TestCase, test.TestCase):
     else:
       dataset = self._create_sparse_dataset(strategy, include_weights=True,
                                             weight=weight)
-      mid_level_api.build(self.batch_size)
+      mid_level_api.build([
+          TensorShape((self.batch_size, 2)),
+          TensorShape((self.batch_size, 2)),
+          TensorShape((self.batch_size, 3))
+      ])
 
-    dataset_iter = iter(strategy.experimental_distribute_dataset(
-        dataset,
-        options=distribute_lib.InputOptions(
-            experimental_prefetch_to_device=False)))
+    dataset_iter = iter(
+        strategy.experimental_distribute_dataset(
+            dataset,
+            options=distribute_lib.InputOptions(
+                experimental_fetch_to_device=False)))
 
     @def_function.function
     def enqueue_and_get(features, weights):
@@ -820,16 +870,22 @@ class TPUEmbeddingTest(parameterized.TestCase, test.TestCase):
 
   @parameterized.parameters([True, False])
   def test_enqueue_with_outside_compilation(self, use_mlir):
+    self.skip_if_oss()
     if use_mlir:
       config.enable_mlir_bridge()
 
     strategy, mid_level_api, _ = self._create_strategy_and_mid_level('sgd')
-    mid_level_api.build(self.batch_size)
+    mid_level_api.build([
+        TensorShape((self.batch_size, 2)),
+        TensorShape((self.batch_size, 2)),
+        TensorShape((self.batch_size, 3))
+    ])
     dataset = self._create_sparse_dataset(strategy)
-    dataset_iter = iter(strategy.experimental_distribute_dataset(
-        dataset,
-        options=distribute_lib.InputOptions(
-            experimental_prefetch_to_device=False)))
+    dataset_iter = iter(
+        strategy.experimental_distribute_dataset(
+            dataset,
+            options=distribute_lib.InputOptions(
+                experimental_fetch_to_device=False)))
 
     @def_function.function
     def enqueue_with_outside_compilation(data):
@@ -858,15 +914,17 @@ class TPUEmbeddingTest(parameterized.TestCase, test.TestCase):
 
   @parameterized.parameters(True, False)
   def test_enqueue_with_outside_compilation_in_control_flow(self, use_mlir):
+    self.skip_if_oss()
     if use_mlir:
       config.enable_mlir_bridge()
 
     strategy, mid_level_api, _ = self._create_strategy_and_mid_level('sgd')
     dataset = self._create_sparse_dataset(strategy)
-    dataset_iter = iter(strategy.experimental_distribute_dataset(
-        dataset,
-        options=distribute_lib.InputOptions(
-            experimental_prefetch_to_device=False)))
+    dataset_iter = iter(
+        strategy.experimental_distribute_dataset(
+            dataset,
+            options=distribute_lib.InputOptions(
+                experimental_fetch_to_device=False)))
 
     # This is one way to force the enqueue in some control flow. @tf.functions
     # aren't inlined in the calling tf.function. An alternative would be to
@@ -888,13 +946,19 @@ class TPUEmbeddingTest(parameterized.TestCase, test.TestCase):
       enqueue_with_outside_compilation()
 
   def test_enqueue_with_outside_compilation_non_direct_input(self):
+    self.skip_if_oss()
     strategy, mid_level_api, _ = self._create_strategy_and_mid_level('sgd')
-    mid_level_api.build(self.batch_size)
+    mid_level_api.build([
+        TensorShape((self.batch_size, 2)),
+        TensorShape((self.batch_size, 2)),
+        TensorShape((self.batch_size, 3))
+    ])
     dataset = self._create_sparse_dataset(strategy)
-    dataset_iter = iter(strategy.experimental_distribute_dataset(
-        dataset,
-        options=distribute_lib.InputOptions(
-            experimental_prefetch_to_device=False)))
+    dataset_iter = iter(
+        strategy.experimental_distribute_dataset(
+            dataset,
+            options=distribute_lib.InputOptions(
+                experimental_fetch_to_device=False)))
 
     @def_function.function
     def enqueue_with_outside_compilation():
@@ -911,13 +975,19 @@ class TPUEmbeddingTest(parameterized.TestCase, test.TestCase):
       enqueue_with_outside_compilation()
 
   def test_enqueue_with_outside_compilation_auto_mode(self):
+    self.skip_if_oss()
     strategy, mid_level_api, _ = self._create_strategy_and_mid_level('sgd')
-    mid_level_api.build(self.batch_size)
+    mid_level_api.build([
+        TensorShape((self.batch_size, 2)),
+        TensorShape((self.batch_size, 2)),
+        TensorShape((self.batch_size, 3))
+    ])
     dataset = self._create_sparse_dataset(strategy)
-    dataset_iter = iter(strategy.experimental_distribute_dataset(
-        dataset,
-        options=distribute_lib.InputOptions(
-            experimental_prefetch_to_device=False)))
+    dataset_iter = iter(
+        strategy.experimental_distribute_dataset(
+            dataset,
+            options=distribute_lib.InputOptions(
+                experimental_fetch_to_device=False)))
 
     @def_function.function
     def enqueue_with_no_gradient_apply(data):
@@ -981,6 +1051,8 @@ class TPUEmbeddingTest(parameterized.TestCase, test.TestCase):
         optimizer = tpu_embedding_v2_utils.Adagrad(learning_rate=0.1)
       elif optimizer_name == 'adam':
         optimizer = tpu_embedding_v2_utils.Adam(learning_rate=0.1)
+      elif optimizer_name == 'ftrl':
+        optimizer = tpu_embedding_v2_utils.FTRL(learning_rate=0.1)
       else:
         raise ValueError('optimizer is not recognized: ', optimizer_name)
       mid_level_api = self._create_mid_level(optimizer=optimizer)
@@ -1057,13 +1129,16 @@ class TPUEmbeddingTest(parameterized.TestCase, test.TestCase):
 
     def input_fn(ctx):
       del ctx
-      features = (
-          constant_op.constant(self.feature_watched_values[-2:],
-                               dtype=dtypes.int32),
-          constant_op.constant(self.feature_favorited_values[-2:],
-                               dtype=dtypes.int32),
-          constant_op.constant(self.feature_friends_values[-2:],
-                               dtype=dtypes.int32))
+      features = (constant_op.constant(
+          self.feature_watched_values[-2:], shape=(2, 1), dtype=dtypes.int32),
+                  constant_op.constant(
+                      self.feature_favorited_values[-2:],
+                      shape=(2, 1),
+                      dtype=dtypes.int32),
+                  constant_op.constant(
+                      self.feature_friends_values[-2:],
+                      shape=(2, 1),
+                      dtype=dtypes.int32))
       if include_weights:
         weights = [array_ops.ones_like(t, dtype=dtypes.float32) * weight
                    for t in features]
@@ -1111,7 +1186,9 @@ class TPUEmbeddingTest(parameterized.TestCase, test.TestCase):
                   table=table_config, name='feature')},
           optimizer=optimizer)
 
-    feature = {'feature': constant_op.constant([0], dtype=dtypes.int32)}
+    feature = {
+        'feature': constant_op.constant([0], shape=(1, 1), dtype=dtypes.int32)
+    }
 
     def input_fn(ctx):
       del ctx
@@ -1119,8 +1196,7 @@ class TPUEmbeddingTest(parameterized.TestCase, test.TestCase):
 
     dist = strategy.distribute_datasets_from_function(
         input_fn,
-        options=distribute_lib.InputOptions(
-            experimental_prefetch_to_device=False))
+        options=distribute_lib.InputOptions(experimental_fetch_to_device=False))
     dist_iter = iter(dist)
 
     @def_function.function
@@ -1229,6 +1305,545 @@ class TPUEmbeddingTest(parameterized.TestCase, test.TestCase):
         # We aren't going to actually run anything, so the batch_size here does
         # not matter.
         mid_level_api.build(self.batch_size)
+
+  def test_same_config_different_instantiations(self):
+    num_tables = 30
+    table_dim = np.random.randint(1, 128, size=[num_tables])
+    table_vocab_size = np.random.randint(100, 1000, size=[num_tables])
+    table_names = ['table{}'.format(i) for i in range(num_tables)]
+    table_data = list(zip(table_dim, table_vocab_size, table_names))
+    strategy = self._get_strategy()
+
+    def tpu_embedding_config():
+      feature_configs = []
+      for dim, vocab, name in table_data:
+        feature_configs.append(tpu_embedding_v2_utils.FeatureConfig(
+            table=tpu_embedding_v2_utils.TableConfig(
+                vocabulary_size=int(vocab), dim=int(dim),
+                initializer=init_ops_v2.Zeros(), name=name)))
+      optimizer = tpu_embedding_v2_utils.Adagrad(
+          learning_rate=0.1)
+      with strategy.scope():
+        mid_level_api = tpu_embedding_v2.TPUEmbedding(
+            feature_config=feature_configs,
+            optimizer=optimizer)
+      mid_level_api._output_shapes = [TensorShape(128)] * len(feature_configs)
+      return mid_level_api._create_config_proto()
+
+    self.assertProtoEquals(tpu_embedding_config(), tpu_embedding_config())
+
+  def test_multiple_creation(self):
+    feature_config = tpu_embedding_v2_utils.FeatureConfig(
+        table=self.table_user, name='friends', max_sequence_length=2)
+    optimizer = tpu_embedding_v2_utils.SGD(learning_rate=0.1)
+    strategy = self._get_strategy()
+    with strategy.scope():
+      embedding_one = tpu_embedding_v2.TPUEmbedding(
+          feature_config=feature_config, optimizer=optimizer)
+      embedding_two = tpu_embedding_v2.TPUEmbedding(
+          feature_config=feature_config, optimizer=optimizer)
+
+    # The first TPU embedding should be able to be built.
+    # The second one should fail with a runtime error indicating another TPU
+    # embedding has already been initialized on TPU.
+    embedding_one.build(64)
+    with self.assertRaisesRegex(RuntimeError,
+                                'TPU is already initialized for embeddings.'):
+      embedding_two.build(64)
+
+  @parameterized.parameters([True, False])
+  def test_sequence_feature(self, is_sparse):
+    seq_length = 3
+    # Set the max_seq_length in feature config
+    for feature in self.feature_config:
+      feature.max_sequence_length = seq_length
+    strategy, mid_level_api, _ = self._create_strategy_and_mid_level('sgd')
+    if is_sparse:
+      dataset = self._create_sparse_dataset(strategy)
+    else:
+      dataset = self._create_ragged_dataset(strategy)
+    feature_iter = iter(
+        strategy.experimental_distribute_dataset(
+            dataset,
+            options=distribute_lib.InputOptions(
+                experimental_fetch_to_device=False)))
+
+    @def_function.function
+    def test_fn():
+
+      def step():
+        return mid_level_api.dequeue()
+
+      mid_level_api.enqueue(next(feature_iter), training=False)
+      return strategy.run(step)
+
+    output = test_fn()
+    self.assertEqual(
+        self._get_replica_numpy(output[0], strategy, 0).shape, (2, 3, 4))
+    self.assertEqual(
+        self._get_replica_numpy(output[1], strategy, 0).shape, (2, 3, 4))
+    self.assertEqual(
+        self._get_replica_numpy(output[2], strategy, 0).shape, (2, 3, 2))
+
+  @parameterized.parameters([True, False])
+  def test_sequence_feature_with_build(self, is_updated_shape):
+    seq_length = 3
+    # Set the max_seq_length in feature config
+    for feature in self.feature_config:
+      feature.max_sequence_length = seq_length
+    strategy, mid_level_api, _ = self._create_strategy_and_mid_level('sgd')
+    dataset = self._create_sparse_dataset(strategy)
+    feature_iter = iter(
+        strategy.experimental_distribute_dataset(
+            dataset,
+            options=distribute_lib.InputOptions(
+                experimental_fetch_to_device=False)))
+    if is_updated_shape:
+      mid_level_api.build([
+          TensorShape([self.batch_size, seq_length, 2]),
+          TensorShape([self.batch_size, seq_length, 2]),
+          TensorShape([self.batch_size, seq_length, 3])
+      ])
+    else:
+      mid_level_api.build([
+          TensorShape([self.batch_size, 2]),
+          TensorShape([self.batch_size, 2]),
+          TensorShape([self.batch_size, 3])
+      ])
+
+    @def_function.function
+    def test_fn():
+
+      def step():
+        return mid_level_api.dequeue()
+
+      mid_level_api.enqueue(next(feature_iter), training=False)
+      return strategy.run(step)
+
+    output = test_fn()
+    self.assertEqual(
+        self._get_replica_numpy(output[0], strategy, 0).shape, (2, 3, 4))
+    self.assertEqual(
+        self._get_replica_numpy(output[1], strategy, 0).shape, (2, 3, 4))
+    self.assertEqual(
+        self._get_replica_numpy(output[2], strategy, 0).shape, (2, 3, 2))
+
+  @parameterized.parameters([True, False])
+  def test_missing_feature(self, is_sparse):
+    strategy = self._get_strategy()
+    with strategy.scope():
+      optimizer = tpu_embedding_v2_utils.SGD(learning_rate=0.1)
+      mid_level_api = tpu_embedding_v2.TPUEmbedding(
+          feature_config=tpu_embedding_v2_utils.FeatureConfig(
+              table=self.table_video, name='watched'),
+          optimizer=optimizer)
+    # Create sparse or ragged feature with last sample missing.
+    if is_sparse:
+      features = sparse_tensor.SparseTensor(
+          indices=self.feature_watched_indices[:-1],
+          values=self.feature_watched_values[:-1],
+          dense_shape=[self.data_batch_size, 2])
+    else:
+      features = ragged_tensor.RaggedTensor.from_row_lengths(
+          row_lengths=[1, 2, 2, 0], values=self.feature_watched_values[:-1])
+
+    dataset = dataset_ops.DatasetV2.from_tensors(features)
+
+    dataset = dataset.unbatch().repeat().batch(
+        self.batch_size * strategy.num_replicas_in_sync, drop_remainder=True)
+    dataset_iter = iter(
+        strategy.experimental_distribute_dataset(
+            dataset,
+            options=distribute_lib.InputOptions(
+                experimental_fetch_to_device=False)))
+
+    @def_function.function
+    def test_fn():
+
+      def get_activations():
+        return mid_level_api.dequeue()
+
+      mid_level_api.enqueue(next(dataset_iter), training=False)
+      return strategy.run(get_activations)
+
+    test_fn()
+
+
+class TPUEmbeddingHighDimensionalTensorTest(parameterized.TestCase,
+                                            test.TestCase):
+
+  def skip_if_oss(self):
+    if FLAGS.project is not None or FLAGS.zone is not None:
+      self.skipTest(
+          'Skipping tests for oss as it is slow to run every test in cloud tpu.'
+      )
+
+  def setUp(self):
+    super(TPUEmbeddingHighDimensionalTensorTest, self).setUp()
+    self.embedding_values = np.array(list(range(32)), dtype=np.float64)
+    self.initializer = init_ops_v2.Constant(self.embedding_values)
+    # Embedding for video initialized to
+    # 0 1 2 3
+    # 4 5 6 7
+    # ...
+    self.table_video = tpu_embedding_v2_utils.TableConfig(
+        vocabulary_size=8,
+        dim=4,
+        initializer=self.initializer,
+        combiner='sum',
+        name='video')
+    # Embedding for user initialized to
+    # 0 1
+    # 2 3
+    # 4 5
+    # 6 7
+    # ...
+    self.table_user = tpu_embedding_v2_utils.TableConfig(
+        vocabulary_size=16,
+        dim=2,
+        initializer=self.initializer,
+        combiner='mean',
+        name='user')
+    self.feature_config = (tpu_embedding_v2_utils.FeatureConfig(
+        table=self.table_video, name='watched'),
+                           tpu_embedding_v2_utils.FeatureConfig(
+                               table=self.table_video, name='favorited'),
+                           tpu_embedding_v2_utils.FeatureConfig(
+                               table=self.table_user, name='friends'))
+
+    self.batch_size = 2
+    self.seq_length = 4
+    self.data_batch_size = 2
+
+    # One (global) batch of inputs
+    # ３D sparse tensor for watched:
+    # sample 0: row 0: 0
+    #           row 1: 0, 1
+    #           row 2: 0, 1
+    #           row 3: 1
+    # sample 1: row 0: 0
+    #           row 1: 0, 1
+    #           row 2: 0, 1
+    #           row 3: 1
+    # Shape: (2, 4, 2)
+    self.feature_watched_indices = [[0, 0, 0], [0, 1, 0], [0, 1, 1], [0, 2, 0],
+                                    [0, 2, 1], [0, 3, 0], [1, 0, 0], [1, 1, 0],
+                                    [1, 1, 1], [1, 2, 0], [1, 2, 1], [1, 3, 0]]
+    self.feature_watched_values = [0, 0, 1, 0, 1, 1, 0, 0, 1, 0, 1, 1]
+    self.feature_watched_row_lengths = [1, 2, 2, 1, 1, 2, 2, 1]
+    # 3D sparse tensor for favorited:
+    # sample 0: row 0: 0, 1
+    #           row 1: 1
+    #           row 2: 0
+    #           row 3: 0, 1
+    # sample 1: row 0: 0, 1
+    #           row 1: 1
+    #           row 2: 0
+    #           row 3: 0, 1
+    # Shape: (2, 4, 2)
+    self.feature_favorited_indices = [[0, 0, 0], [0, 0, 1], [0, 1,
+                                                             0], [0, 2, 0],
+                                      [0, 3, 0], [0, 3, 1], [1, 0,
+                                                             0], [1, 0, 1],
+                                      [1, 1, 0], [1, 2, 0], [1, 3, 0],
+                                      [1, 3, 1]]
+    self.feature_favorited_values = [0, 1, 1, 0, 0, 1, 0, 1, 1, 0, 0, 1]
+    self.feature_favorited_row_lengths = [2, 1, 1, 2, 2, 1, 1, 2]
+    # 3D sparse tensor for friends:
+    # sample 0: row 0: 3
+    #           row 1: 0, 1, 2
+    #           row 2: 3
+    #           row 3: 0, 1, 2
+    # sample 1: row 0: 3
+    #           row 1: 0, 1, 2
+    #           row 2: 3
+    #           row 3: 0, 1, 2
+    # Shape: (2, 4, 3)
+    self.feature_friends_indices = [[0, 0, 0], [0, 1, 0], [0, 1, 1], [0, 1, 2],
+                                    [0, 2, 0], [0, 3, 0], [0, 3, 1], [0, 3, 2],
+                                    [1, 0, 0], [1, 1, 0], [1, 1, 1], [1, 1, 2],
+                                    [1, 2, 0], [1, 3, 0], [1, 3, 1], [1, 3, 2]]
+    self.feature_friends_values = [
+        3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2
+    ]
+    self.feature_friends_row_lengths = [1, 3, 1, 3, 1, 3, 1, 3]
+    self.resolver = None
+
+  def _get_strategy(self):
+    self.resolver = tpu_cluster_resolver.TPUClusterResolver(
+        tpu=FLAGS.tpu, zone=FLAGS.zone, project=FLAGS.project)
+    remote.connect_to_cluster(self.resolver)
+    tpu_strategy_util.initialize_tpu_system(self.resolver)
+    strategy = tpu_strategy.TPUStrategy(self.resolver)
+    self.num_replicas = strategy.num_replicas_in_sync
+    return strategy
+
+  def _create_strategy_and_mid_level(self, optimizer_name):
+    strategy = self._get_strategy()
+
+    with strategy.scope():
+      if optimizer_name == 'sgd':
+        optimizer = tpu_embedding_v2_utils.SGD(learning_rate=0.1)
+      elif optimizer_name == 'adagrad':
+        optimizer = tpu_embedding_v2_utils.Adagrad(learning_rate=0.1)
+      elif optimizer_name == 'adam':
+        optimizer = tpu_embedding_v2_utils.Adam(learning_rate=0.1)
+      elif optimizer_name == 'ftrl':
+        optimizer = tpu_embedding_v2_utils.FTRL(learning_rate=0.1)
+      else:
+        raise ValueError('optimizer is not recognized: ', optimizer_name)
+      mid_level_api = self._create_mid_level(optimizer=optimizer)
+
+    return strategy, mid_level_api, optimizer
+
+  def _create_mid_level(self, optimizer=None):
+    # Create `TPUEmbedding` object.
+    if optimizer is None:
+      optimizer = tpu_embedding_v2_utils.SGD(learning_rate=0.1)
+
+    return tpu_embedding_v2.TPUEmbedding(
+        feature_config=self.feature_config, optimizer=optimizer)
+
+  def _create_sparse_dataset(self, strategy, include_weights=False, weight=0.5):
+    # Create dataset for enqueue operation
+    sparse_features = (sparse_tensor.SparseTensor(
+        indices=self.feature_watched_indices,
+        values=self.feature_watched_values,
+        dense_shape=[self.data_batch_size, self.seq_length, 2]),
+                       sparse_tensor.SparseTensor(
+                           indices=self.feature_favorited_indices,
+                           values=self.feature_favorited_values,
+                           dense_shape=[
+                               self.data_batch_size, self.seq_length, 2
+                           ]),
+                       sparse_tensor.SparseTensor(
+                           indices=self.feature_friends_indices,
+                           values=self.feature_friends_values,
+                           dense_shape=[
+                               self.data_batch_size, self.seq_length, 3
+                           ]))
+    if include_weights:
+      weights = []
+      for sparse in sparse_features:
+        values = (
+            array_ops.ones_like(sparse.values, dtype=dtypes.float32) * weight)
+        weights.append(
+            sparse_tensor.SparseTensor(
+                indices=sparse.indices,
+                values=values,
+                dense_shape=sparse.dense_shape))
+      sparse_features = (sparse_features, tuple(weights))
+
+    dataset = dataset_ops.DatasetV2.from_tensors(sparse_features)
+
+    # Data is batched to self.data_batch_size, rebatch to global batch size.
+    return dataset.unbatch().repeat().batch(
+        self.batch_size * strategy.num_replicas_in_sync, drop_remainder=True)
+
+  def _create_ragged_dataset(self, strategy, include_weights=False, weight=0.5):
+    # Create dataset for enqueue operation
+    ragged_features = (ragged_tensor.RaggedTensor.from_row_lengths(
+        row_lengths=self.feature_watched_row_lengths,
+        values=self.feature_watched_values),
+                       ragged_tensor.RaggedTensor.from_row_lengths(
+                           row_lengths=self.feature_favorited_row_lengths,
+                           values=self.feature_favorited_values),
+                       ragged_tensor.RaggedTensor.from_row_lengths(
+                           row_lengths=self.feature_friends_row_lengths,
+                           values=self.feature_friends_values))
+    if include_weights:
+      weights = []
+      for ragged in ragged_features:
+        weights.append(
+            ragged.with_values(
+                array_ops.ones_like(ragged.values, dtype=dtypes.float32) *
+                weight))
+      ragged_features = (ragged_features, tuple(weights))
+
+    dataset = dataset_ops.DatasetV2.from_tensors(ragged_features)
+
+    # Data is batched to self.data_batch_size, rebatch to global batch size.
+    return dataset.unbatch().repeat().batch(
+        self.batch_size * strategy.num_replicas_in_sync, drop_remainder=True)
+
+  def _create_dense_dataset(self, strategy, include_weights=False, weight=0.5):
+    features = (constant_op.constant(
+        np.zeros(self.data_batch_size * self.seq_length),
+        shape=(self.data_batch_size, self.seq_length, 1),
+        dtype=dtypes.int32),
+                constant_op.constant(
+                    np.ones(self.data_batch_size * self.seq_length),
+                    shape=(self.data_batch_size, self.seq_length, 1),
+                    dtype=dtypes.int32),
+                constant_op.constant(
+                    np.zeros(self.data_batch_size * self.seq_length),
+                    shape=(self.data_batch_size, self.seq_length, 1),
+                    dtype=dtypes.int32))
+    if include_weights:
+      weights = [
+          array_ops.ones_like(t, dtype=dtypes.float32) * weight
+          for t in features
+      ]
+      features = (features, tuple(weights))
+    dataset = dataset_ops.DatasetV2.from_tensors(features)
+    return dataset.unbatch().repeat().batch(
+        self.batch_size * strategy.num_replicas_in_sync, drop_remainder=True)
+
+  def test_enqueue_dense_sparse_ragged(self):
+    strategy, mid_level_api, _ = self._create_strategy_and_mid_level('sgd')
+
+    dense = self._create_dense_dataset(strategy)
+    dense_iter = iter(
+        strategy.experimental_distribute_dataset(
+            dense,
+            options=distribute_lib.InputOptions(
+                experimental_fetch_to_device=False)))
+
+    sparse = self._create_sparse_dataset(strategy)
+    sparse_iter = iter(
+        strategy.experimental_distribute_dataset(
+            sparse,
+            options=distribute_lib.InputOptions(
+                experimental_fetch_to_device=False)))
+
+    ragged = self._create_ragged_dataset(strategy)
+    ragged_iter = iter(
+        strategy.experimental_distribute_dataset(
+            ragged,
+            options=distribute_lib.InputOptions(
+                experimental_fetch_to_device=False)))
+
+    mid_level_api.build({
+        'watched': TensorShape([self.batch_size, self.seq_length, 1]),
+        'favorite': TensorShape([self.batch_size, self.seq_length, 2]),
+        'friends': TensorShape([self.batch_size, self.seq_length, None])
+    })
+
+    @def_function.function
+    def test_fn():
+
+      def step():
+        return mid_level_api.dequeue()
+
+      features = (next(dense_iter)[0], next(sparse_iter)[1],
+                  next(ragged_iter)[2])
+      mid_level_api.enqueue(features, training=False)
+      return strategy.run(step)
+
+    test_fn()
+
+  def test_different_input_shapes(self):
+    strategy, mid_level_api, _ = self._create_strategy_and_mid_level('sgd')
+
+    sparse = self._create_sparse_dataset(strategy)
+    sparse_iter = iter(
+        strategy.experimental_distribute_dataset(
+            sparse,
+            options=distribute_lib.InputOptions(
+                experimental_fetch_to_device=False)))
+    # Create a feature with shape (1, 3, 1)
+    dense_feature = constant_op.constant(
+        np.zeros(3), shape=(1, 3, 1), dtype=dtypes.int32)
+    dense_dataset = dataset_ops.DatasetV2.from_tensors(
+        dense_feature).unbatch().repeat().batch(
+            1 * strategy.num_replicas_in_sync, drop_remainder=True)
+    dense_iter = iter(
+        strategy.experimental_distribute_dataset(
+            dense_dataset,
+            options=distribute_lib.InputOptions(
+                experimental_fetch_to_device=False)))
+
+    @def_function.function
+    def test_fn():
+
+      def step():
+        return mid_level_api.dequeue()
+
+      features = (next(dense_iter), next(sparse_iter)[1], next(sparse_iter)[2])
+      mid_level_api.enqueue(features, training=False)
+      return strategy.run(step)
+
+    test_fn()
+
+    self.assertEqual(
+        mid_level_api._output_shapes,
+        [TensorShape((1, 3)),
+         TensorShape((2, 4)),
+         TensorShape((2, 4))])
+
+  def test_build_incorrect_output_shapes(self):
+    _, mid_level_api, _ = self._create_strategy_and_mid_level('sgd')
+    # Output shapes is set in the mid_level_api, but build with incorrect output
+    # shapes.
+    mid_level_api._output_shapes = [TensorShape((2, 4)) for _ in range(3)]
+
+    with self.assertRaisesRegex(ValueError,
+                                'Inconsistent shape founded for input feature'):
+      mid_level_api.build([TensorShape([1, 1, 1]) for _ in range(3)])
+
+  def test_enqueue_incorrect_shape_feature(self):
+    strategy, mid_level_api, _ = self._create_strategy_and_mid_level('sgd')
+
+    sparse = self._create_sparse_dataset(strategy)
+    sparse_iter = iter(
+        strategy.experimental_distribute_dataset(
+            sparse,
+            options=distribute_lib.InputOptions(
+                experimental_fetch_to_device=False)))
+
+    mid_level_api._output_shapes = [TensorShape((1, 1)) for _ in range(3)]
+    # The output shape passed to build method is consistent.
+    mid_level_api.build([TensorShape([1, 1, 1]) for _ in range(3)])
+
+    @def_function.function
+    def test_fn():
+
+      def step():
+        return mid_level_api.dequeue()
+
+      mid_level_api.enqueue(next(sparse_iter), training=False)
+      return strategy.run(step)
+
+    # Enqueued tensor has shape inconsistent with the output shape setting.
+    with self.assertRaisesRegex(ValueError,
+                                'Inconsistent shape founded for input feature'):
+      test_fn()
+
+  def test_not_fully_defined_output_shapes_in_feature_config(self):
+    self.skip_if_oss()
+    _, mid_level_api, _ = self._create_strategy_and_mid_level('sgd')
+
+    # Feature config sets undefined output shapes
+    mid_level_api._output_shapes = [TensorShape(None) for _ in range(3)]
+    with self.assertRaisesRegex(ValueError, 'Input Feature'):
+      mid_level_api.build()
+
+  def test_not_fully_defined_output_shapes_for_build(self):
+    self.skip_if_oss()
+    _, mid_level_api, _ = self._create_strategy_and_mid_level('sgd')
+
+    # Build with undefined output shape
+    with self.assertRaisesRegex(ValueError, 'Input Feature'):
+      mid_level_api.build([TensorShape([1, None, None]) for _ in range(3)])
+
+  def test_output_shapes_priority_over_feature_config_and_build(self):
+    _, mid_level_api, _ = self._create_strategy_and_mid_level('sgd')
+
+    # The output shapes setting in the feature config has the first priority.
+    mid_level_api._output_shapes = [TensorShape((2, 4)) for _ in range(3)]
+    mid_level_api.build([TensorShape((2, None, None)) for _ in range(3)])
+    self.assertEqual(mid_level_api._output_shapes,
+                     [TensorShape((2, 4)) for _ in range(3)])
+
+  def _get_replica_numpy(self, structured, strategy, replica_id):
+
+    def select_replica(x):
+      x = strategy.experimental_local_results(x)
+      if len(x) == 1:
+        return x.numpy()
+      return x[replica_id].numpy()
+
+    return nest.map_structure(select_replica, structured)
 
 
 def _unpack(strategy, per_replica_output):

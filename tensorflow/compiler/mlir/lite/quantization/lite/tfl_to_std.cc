@@ -16,6 +16,8 @@ limitations under the License.
 
 #include "llvm/Support/Casting.h"
 #include "mlir/Dialect/Quant/QuantOps.h"  // from @llvm-project
+#include "mlir/Dialect/StandardOps/IR/Ops.h"  // from @llvm-project
+#include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/lite/ir/tfl_ops.h"
 #include "tensorflow/compiler/mlir/lite/quantization/quantization_utils.h"
 
@@ -36,6 +38,18 @@ void ConvertTFLQuantOpsToMlirQuantOps(FuncOp func) {
           q.getLoc(), q.output().getType(), q.input());
       q.output().replaceAllUsesWith(qcast);
       q.erase();
+    } else if (auto q = llvm::dyn_cast<ConstOp>(op)) {
+      auto value = q.value();
+      auto type = q.getResult().getType();
+      if (arith::ConstantOp::isBuildableWith(value, type)) {
+        auto c = b.create<arith::ConstantOp>(q.getLoc(), q.value());
+        q.output().replaceAllUsesWith(c);
+        q.erase();
+      } else if (TFL::NoValueOp::isBuildableWith(value, type)) {
+        auto c = b.create<TFL::NoValueOp>(q.getLoc(), type, mlir::UnitAttr());
+        q.output().replaceAllUsesWith(c);
+        q.erase();
+      }
     }
   });
 }

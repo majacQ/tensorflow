@@ -49,6 +49,10 @@ const char* kModelWithArgMaxOp = "argmax.bin";
 
 const char* kModelWithFCOp = "fc.bin";
 
+const char* kModelWithGatherNDOp = "gather_nd.bin";
+
+const char* kModelWithWhereOp = "where.bin";
+
 const char* kModelMixed = "mixed.bin";
 const char* kModelMixed16x8 = "mixed16x8.bin";
 
@@ -76,6 +80,7 @@ const char* kSvdfQuantized = "svdf_quantized.bin";
 
 const char* kModelWithUnpack = "unpack.bin";
 const char* kQatModelWithFc = "fc_qat.bin";
+const char* kModelWithResourceVarsCalibrated = "resource_vars_calibrated.bin";
 
 int FailOnErrorReporter::Report(const char* format, va_list args) {
   char buf[1024];

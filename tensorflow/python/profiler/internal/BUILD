@@ -6,7 +6,7 @@ load("//tensorflow/core/profiler/builds:build_config.bzl", "tf_profiler_copts")
 
 package(
     default_visibility = ["//tensorflow/python/profiler:__subpackages__"],
-    licenses = ["notice"],  # Apache 2.0
+    licenses = ["notice"],
 )
 
 py_library(
@@ -43,7 +43,7 @@ py_test(
     name = "print_model_analysis_test",
     srcs = ["print_model_analysis_test.py"],
     python_version = "PY3",
-    srcs_version = "PY2AND3",
+    srcs_version = "PY3",
     deps = [
         "//tensorflow/core/profiler:protos_all_py",
         "//tensorflow/python:array_ops",
@@ -119,6 +119,7 @@ tf_python_pybind_extension(
     ],
     deps = [
         ":profiler_pywrap_impl",
+        "//tensorflow/core/platform:env",
         "//tensorflow/core/profiler/convert:xplane_to_tools_data",
         "//tensorflow/core/profiler/rpc:profiler_server_for_pybind",
         "//tensorflow/python:pybind11_status",
@@ -144,6 +145,7 @@ cc_library(
         "//tensorflow/core/profiler/utils:xplane_schema",
         "//tensorflow/core/profiler/utils:xplane_utils",
         "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/memory",
         "@com_google_absl//absl/strings",
         "@pybind11",
     ],

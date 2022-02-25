@@ -47,6 +47,8 @@ TODO: Make invariants more structured so that we can reference them in ops.
   }];
 
   let cppNamespace = "::mlir::TF";
+
+  let emitAccessorPrefix = kEmitAccessorPrefix_Raw;
 }
 
 //===----------------------------------------------------------------------===//
@@ -92,13 +94,13 @@ def TF_CwiseUnary : NativeOpTrait<"TF::CwiseUnary">;
 // Variant of broadcastable trait that considers TF's subtype behavior.
 class TF_OpIsBroadcastableToRes<int opId, int resId> : And<[
     TCOpResIsShapedTypePred<opId, resId>,
-    CPred<"mlir::TF::BroadcastCompatible("
+    CPred<"mlir::tf_type::BroadcastCompatible("
               "$_op.getOperand(" # opId # ").getType(), "
               "$_op.getResult(" # resId # ").getType())">]>;
 
 
 class TF_AllTypesMatchPred<list<string> values> :
-    CPred<"TF::AreCastCompatible(llvm::makeArrayRef({" #
+    CPred<"tf_type::AreCastCompatible(llvm::makeArrayRef({" #
       !interleave(values, ", ") # "}))">;
 
 class TF_AllTypesMatch<list<string> names> :
@@ -107,6 +109,18 @@ class TF_AllTypesMatch<list<string> names> :
           "} have dynamically equal types ",
         TF_AllTypesMatchPred<
             !foreach(n, names, !subst("$_self", "$" # n, "$_self.getType()"))>>;
+
+// This trait indicates that all returned resources are unique for a
+// resource-allocating op (i.e. op with `MemAlloc` side effect).
+//
+// Note that if the trait is used where this invariant is not true, then this
+// might lead to incorrect execution order, while if not used where it should
+// be, it can only lead to reduced performance due to conservative ordering.
+// Example op where the invariant is not true: `TF_VarHandleOp`.
+def TF_UniqueResourceAllocation: TraitList<[
+    TF_ResourceHandleAllocatorInterface,
+    NativeOpTrait<"TF::UniqueResourceAllocation">
+]>;
 
 //===----------------------------------------------------------------------===//
 // Rank/Shape helpers.
@@ -133,13 +147,14 @@ class TF_ResultHasRank<int n, int m> :
       ").getType().cast<ShapedType>().getRank() == " # m>]>>;
 
 //===----------------------------------------------------------------------===//
-// TensorFlow op side effects
+// TensorFlow resources and side effects
 //===----------------------------------------------------------------------===//
 
 class TF_ResourceBase<string resourceKind> :
   Resource<!strconcat("::mlir::TF::ResourceEffects::", resourceKind)> {
 }
 
+// Resource types
 def TF_VariableResource : TF_ResourceBase<"Variable">;
 def TF_StackResource : TF_ResourceBase<"Stack">;
 def TF_TensorArrayResource : TF_ResourceBase<"TensorArray">;
@@ -149,7 +164,19 @@ def TF_DatasetSeedGeneratorResource : TF_ResourceBase<"DatasetSeedGenerator">;
 def TF_DatasetMemoryCacheResource : TF_ResourceBase<"DatasetMemoryCache">;
 def TF_DatasetIteratorResource : TF_ResourceBase<"DatasetIterator">;
 def TF_TPUEmbeddingResource : TF_ResourceBase<"TPUEmbedding">;
+def TF_GeneratorOpResource : TF_ResourceBase<"GeneratorOp">;
+def TF_SendResource : TF_ResourceBase<"Send">;
+def TF_RecvResource : TF_ResourceBase<"Recv">;
+def TF_TPUExecuteResource : TF_ResourceBase<"TPUExecute">;
+def TF_RandomGeneratorResource : TF_ResourceBase<"RandomGenerator">;
 
+// Fake resource, see `TF_MustExecute` below.
+def TF_MustExecuteResource : TF_ResourceBase<"MustExecute">;
+
+// Value-based side effects
+//
+// Value-based side effect traits are attached to op operands or results to
+// signal what type of resource is accessed and in which way.
 def TF_VariableRead : MemRead<TF_VariableResource>;
 def TF_StackRead : MemRead<TF_StackResource>;
 def TF_TensorArrayRead : MemRead<TF_TensorArrayResource>;
@@ -183,13 +210,41 @@ def TF_DatasetSeedGeneratorFree : MemFree<TF_DatasetSeedGeneratorResource>;
 def TF_DatasetMemoryCacheFree : MemFree<TF_DatasetMemoryCacheResource>;
 def TF_DatasetIteratorFree : MemFree<TF_DatasetIteratorResource>;
 
-def TF_TPUEmbeddingSideEffect : MemoryEffects<[MemWrite<TF_TPUEmbeddingResource>]>;
+// Op-based side effects
+
+// Op-based side effect traits can be used to enforce certain execution order
+// constraints, in particular for ops that don't use resource handles (those
+// typically have value-based side effects). For a `read` effect, all instances
+// of ops with the trait keep their order to all ops with unknown side effects
+// (e.g. `stateful` ops). For a `write` effect, all instances of ops with the
+// trait stay in order, and they also keep their order to all unknown side-
+// effecting ops. Note that for `read` effects ops might be pruned if nothing
+// depends on them.
+def TF_GeneratorOpSideEffect : MemoryEffects<[MemWrite<TF_GeneratorOpResource>]>;
+
+def TF_TPUEmbeddingWriteEffect : MemoryEffects<[MemWrite<TF_TPUEmbeddingResource>]>;
+def TF_TPUEmbeddingReadEffect : MemoryEffects<[MemRead<TF_TPUEmbeddingResource>]>;
+
+def TF_SendSideEffect : MemoryEffects<[MemWrite<TF_SendResource>]>;
+def TF_RecvSideEffect : MemoryEffects<[MemWrite<TF_RecvResource>]>;
+
+def TF_TPUExecuteSideEffect : MemoryEffects<[MemWrite<TF_TPUExecuteResource>]>;
+
+def TF_RandomGeneratorSideEffect : MemoryEffects<[MemWrite<TF_RandomGeneratorResource>]>;
+
+// Trait for enforcing that a side-effecting op is executed, even if it would be
+// considered dead by MLIR (see b/195782952).
+// The trait is implemented as a write effect for a fake resource which is
+// ignored by side effect analysis, so it does not affect execution order
+// constraints and control dependencies at all (for example, multiple ops with
+// this trait do not have to execute in order).
+def TF_MustExecute : MemoryEffects<[MemWrite<TF_MustExecuteResource>]>;
 
 //===----------------------------------------------------------------------===//
 // TensorFlow op definitions
 //===----------------------------------------------------------------------===//
 
-class TF_Op<string mnemonic, list<OpTrait> traits = []> :
+class TF_Op<string mnemonic, list<Trait> traits = []> :
     Op<TF_Dialect, mnemonic, traits>;
 
 //===----------------------------------------------------------------------===//
@@ -394,6 +449,9 @@ def TF_Number : AnyTypeOf<
   [TF_Int, TF_Float, TF_Quantized, TF_Complex], "number">;
 def TF_NumberTensor : TensorOf<[TF_Number]>;
 
+def TF_NumberNotQuantizedTensor : TensorOf<
+  [TF_Float, TF_SInt, TF_Complex, TF_Uint8]>;
+
 def TF_NumberNotQuantizedOrStr :
   AnyTypeOf<[TF_Float, TF_SInt, TF_Complex, TF_Uint8, TF_Str]>;
 def TF_NumberNotQuantizedOrStrTensor : TensorOf<[TF_NumberNotQuantizedOrStr]>;
@@ -477,13 +535,13 @@ class TF_DerivedOperandTypeListAttr<int idx> : DerivedAttr<
   "return {mlir::OperandElementTypeIterator(values.begin()), "
           "mlir::OperandElementTypeIterator(values.end())};",
   [{
-    ArrayAttr::get(
+    ArrayAttr::get($_ctx, 
     [&]() {
       llvm::SmallVector<Attribute, 4> ret;
       for (auto t : $_self)
         ret.push_back(TypeAttr::get(t));
       return ret;
-    }(), $_ctx)
+    }())
   }]
 >;
 
@@ -497,13 +555,13 @@ class TF_DerivedOperandShapeListAttr<int idx> : DerivedAttr<
   "return {mlir::TF::OperandShapeIterator(values.begin()), "
           "mlir::TF::OperandShapeIterator(values.end())};",
   [{
-    ArrayAttr::get(
+    ArrayAttr::get($_ctx,
       [&](){
         llvm::SmallVector<Attribute, 4> ret;
         for (auto shape : $_self)
           ret.push_back(mlir::TF::ShapeAttr::get($_ctx, shape));
         return ret;
-      }(), $_ctx)
+      }())
   }]
 >;
 
@@ -533,13 +591,13 @@ class TF_DerivedResultTypeListAttr<int idx> : DerivedAttr<
   "return {mlir::ResultElementTypeIterator(values.begin()), "
           "mlir::ResultElementTypeIterator(values.end())};",
   [{
-    ArrayAttr::get(
+    ArrayAttr::get($_ctx, 
     [&]() {
       llvm::SmallVector<Attribute, 4> ret;
       for (auto t : $_self)
         ret.push_back(TypeAttr::get(t));
       return ret;
-    }(), $_ctx)
+    }())
   }]
 >;
 
@@ -553,13 +611,13 @@ class TF_DerivedResultShapeListAttr<int idx> : DerivedAttr<
   "return {mlir::TF::ResultShapeIterator(values.begin()), "
           "mlir::TF::ResultShapeIterator(values.end())};",
   [{
-    ArrayAttr::get(
+    ArrayAttr::get($_ctx,
       [&](){
         llvm::SmallVector<Attribute, 4> ret;
         for (auto shape : $_self)
           ret.push_back(mlir::TF::ShapeAttr::get($_ctx, shape));
         return ret;
-      }(), $_ctx)
+      }())
   }]
 >;
 
@@ -579,8 +637,8 @@ def TF_IntTypeAttr : TypeAttrBase<"IntegerType", "integer type"> {
 // Mixin class defining a builder for binary ops supporting broadcast
 // behavior. The result type has the same element type as both operands.
 class WithBroadcastableBinOpBuilder {
-  list<OpBuilderDAG> builders = [
-    OpBuilderDAG<(ins "Value":$x, "Value":$y),
+  list<OpBuilder> builders = [
+    OpBuilder<(ins "Value":$x, "Value":$y),
     [{
   auto resultType =
       OpTrait::util::getBroadcastedType(x.getType(), y.getType());
@@ -593,8 +651,8 @@ class WithBroadcastableBinOpBuilder {
 // Mixin class defining a builder for comparison ops supporting broadcast
 // behavior. The result type has bool element type.
 class WithBroadcastableCmpOpBuilder {
-  list<OpBuilderDAG> builders = [
-    OpBuilderDAG<(ins "Value":$x, "Value":$y),
+  list<OpBuilder> builders = [
+    OpBuilder<(ins "Value":$x, "Value":$y),
     [{
   Type resultType;
   if (x.getType().isa<UnrankedTensorType>() ||

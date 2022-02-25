@@ -20,7 +20,6 @@ limitations under the License.
 #include <stdint.h>
 
 #include "tensorflow/c/tf_attrtype.h"
-#include "tensorflow/c/tf_status.h"
 #include "tensorflow/core/tpu/libtftpu.h"
 #include "tensorflow/stream_executor/tpu/c_api_decl.h"
 
@@ -123,6 +122,12 @@ void TpuExecutor_BlockUntilDoneOrFailed(SE_StreamExecutor* executor,
 void TpuExecutor_SyncAndForgetFailedStreams(SE_StreamExecutor* executor);
 bool TpuExecutor_SynchronizeAllActivity(SE_StreamExecutor* executor);
 
+void TpuExecutor_UnloadAllPrograms(SE_StreamExecutor* executor,
+                                   TF_Status* status);
+void TpuExecutor_EnqueueCompactionOnStreamForHbm(SE_StreamExecutor* executor,
+                                                 SE_Stream* compaction_stream,
+                                                 TF_Status* status);
+
 SE_Stream* TpuStream_New(SE_StreamExecutor* parent);
 void TpuStream_Free(SE_Stream*);
 void* TpuStream_Stream(SE_Stream*);
@@ -219,14 +224,17 @@ void TpuTransferManager_TransferBuffersToInfeed(XLA_TransferManager* manager,
                                                 int64_t* buffers_size_in_uint32,
                                                 int64_t buffers_array_size,
                                                 TF_Status* status);
-void TpuTransferManager_TransferLiteralFromOutfeed(XLA_TransferManager* manager,
-                                                   SE_StreamExecutor* executor,
-                                                   XLA_Shape* shape,
-                                                   XLA_Literal* c_literal,
-                                                   TF_Status* status);
+void TpuTransferManager_TransferLiteralFromOutfeed(
+    XLA_TransferManager* manager, SE_StreamExecutor* executor,
+    XLA_Shape* shape /*deprecated*/, XLA_Literal* c_literal, TF_Status* status);
 void TpuTransferManager_ResetDevices(XLA_TransferManager* manager,
                                      SE_StreamExecutor** executors,
                                      int64_t num_executors, TF_Status* status);
+void TpuTransferManager_ReadDynamicShapes(SE_Stream* stream,
+                                          XLA_ShapedBuffer* buffer,
+                                          const XLA_Shape& original_shape,
+                                          XLA_Shape* updated_shape,
+                                          TF_Status* status);
 
 XLA_ComputationPlacer* TpuComputationPlacer_New();
 void TpuComputationPlacer_Free(XLA_ComputationPlacer* placer);
@@ -254,9 +262,12 @@ int TpuTopology_ChipBounds_X(SE_TpuTopology* tpu_topology);
 int TpuTopology_ChipBounds_Y(SE_TpuTopology* tpu_topology);
 int TpuTopology_ChipBounds_Z(SE_TpuTopology* tpu_topology);
 bool TpuTopology_HasChip(SE_TpuTopology* tpu_topology, int x, int y, int z);
-SE_TpuTopology_Core* TpuTopology_Core(SE_TpuTopology* tpu_topology, int x,
-                                      int y, int z,
-                                      TpuCoreTypeEnum tpu_core_type, int index);
+SE_TpuTopology_Core* TpuTopology_CoreForId(SE_TpuTopology* tpu_topology,
+                                           TpuCoreTypeEnum tpu_core_type,
+                                           int id);
+SE_TpuTopology_Core* TpuTopology_Core(SE_TpuTopology* tpu_topology,
+                                      TpuCoreTypeEnum tpu_core_type, int x,
+                                      int y, int z, int index);
 int TpuTopology_NumCores(SE_TpuTopology* tpu_topology,
                          TpuCoreTypeEnum tpu_core_type);
 // 'cores' should be a preallocated array of size TpuTopology_NumCores.
@@ -279,6 +290,10 @@ int TpuHostLocation_NumCores(SE_TpuTopology_Host* tpu_host_location,
 void TpuHostLocation_Cores(SE_TpuTopology_Host* tpu_host_location,
                            TpuCoreTypeEnum tpu_core_type,
                            SE_TpuTopology_Core** cores);
+
+// Async collective offloading.
+void TpuAsyncCollectiveOffloadHelper_Init();
+void TpuAsyncCollectiveOffloadHelper_Shutdown();
 
 // C API for XLA::Compiler interface
 
@@ -325,6 +340,36 @@ TFTPU_CAPI_EXPORT void TpuExecutable_FreeMaybeOwningDeviceMemoryArray(
 TFTPU_CAPI_EXPORT void TpuExecutable_Fingerprint(SE_Executable* executable,
                                                  const char** fingerprint,
                                                  size_t* size);
+
+// The serialization format is not guaranteed to be stable over time and has no
+// compatibility guarantees (i.e. this is not a suitable long-term storage
+// format). TpuExecutableSerialize_FreeHandle should be called after 'handle' is
+// no longer needed. 'handle' is set to nullptr on error.
+TFTPU_CAPI_EXPORT void TpuExecutable_Serialize(
+    SE_Executable* executable, SE_ExecutableSerializationHandle** handle,
+    TF_Status* status);
+
+// Returns the size of the serialized executable in bytes, i.e. the size of the
+// array that should be passed to TpuExecutableSerialize_WriteToArray. `handle`
+// must be non-null.
+TFTPU_CAPI_EXPORT size_t
+TpuExecutableSerialize_GetByteSize(SE_ExecutableSerializationHandle* handle);
+
+// Writes the serialized executable to `serialized`, which must be of size
+// `serialized_size`. `serialized_size` should must be at least
+// `TpuExecutableSerialize_GetByteSize(handle)`. `handle` must be non-null.
+TFTPU_CAPI_EXPORT void TpuExecutableSerialize_WriteToArray(
+    SE_ExecutableSerializationHandle* handle, int serialized_size,
+    uint8_t* serialized, TF_Status* status);
+
+// Safe to call if 'handle' is null.
+TFTPU_CAPI_EXPORT void TpuExecutableSerialize_FreeHandle(
+    SE_ExecutableSerializationHandle* handle);
+
+TFTPU_CAPI_EXPORT void TpuExecutable_Deserialize(int serialized_size,
+                                                 const uint8_t* serialized,
+                                                 SE_Executable** executable,
+                                                 TF_Status* status);
 
 // Caller is responsible for freeing the returned module's proto and its
 // config's proto.
@@ -389,6 +434,8 @@ struct TfTpu_ExecutorApiFn {
   TFTPU_ADD_FN_IN_STRUCT(TpuExecutor_BlockUntilDoneOrFailed);
   TFTPU_ADD_FN_IN_STRUCT(TpuExecutor_SyncAndForgetFailedStreams);
   TFTPU_ADD_FN_IN_STRUCT(TpuExecutor_SynchronizeAllActivity);
+  TFTPU_ADD_FN_IN_STRUCT(TpuExecutor_UnloadAllPrograms);
+  TFTPU_ADD_FN_IN_STRUCT(TpuExecutor_EnqueueCompactionOnStreamForHbm);
 
   TFTPU_ADD_FN_IN_STRUCT(TpuStream_New);
   TFTPU_ADD_FN_IN_STRUCT(TpuStream_Free);
@@ -445,6 +492,7 @@ struct TfTpu_ExecutorApiFn {
   TFTPU_ADD_FN_IN_STRUCT(TpuTransferManager_TransferBuffersToInfeed);
   TFTPU_ADD_FN_IN_STRUCT(TpuTransferManager_TransferLiteralFromOutfeed);
   TFTPU_ADD_FN_IN_STRUCT(TpuTransferManager_ResetDevices);
+  TFTPU_ADD_FN_IN_STRUCT(TpuTransferManager_ReadDynamicShapes);
 
   TFTPU_ADD_FN_IN_STRUCT(TpuComputationPlacer_New);
   TFTPU_ADD_FN_IN_STRUCT(TpuComputationPlacer_Free);
@@ -460,6 +508,7 @@ struct TfTpu_ExecutorApiFn {
   TFTPU_ADD_FN_IN_STRUCT(TpuTopology_ChipBounds_Y);
   TFTPU_ADD_FN_IN_STRUCT(TpuTopology_ChipBounds_Z);
   TFTPU_ADD_FN_IN_STRUCT(TpuTopology_HasChip);
+  TFTPU_ADD_FN_IN_STRUCT(TpuTopology_CoreForId);
   TFTPU_ADD_FN_IN_STRUCT(TpuTopology_Core);
   TFTPU_ADD_FN_IN_STRUCT(TpuTopology_NumCores);
   TFTPU_ADD_FN_IN_STRUCT(TpuTopology_Cores);
@@ -485,11 +534,19 @@ struct TfTpu_ExecutorApiFn {
   TFTPU_ADD_FN_IN_STRUCT(TpuExecutable_FreeXlaShapeIndexArray);
   TFTPU_ADD_FN_IN_STRUCT(TpuExecutable_FreeMaybeOwningDeviceMemoryArray);
   TFTPU_ADD_FN_IN_STRUCT(TpuExecutable_Fingerprint);
+  TFTPU_ADD_FN_IN_STRUCT(TpuExecutable_Serialize);
+  TFTPU_ADD_FN_IN_STRUCT(TpuExecutableSerialize_GetByteSize);
+  TFTPU_ADD_FN_IN_STRUCT(TpuExecutableSerialize_WriteToArray);
+  TFTPU_ADD_FN_IN_STRUCT(TpuExecutableSerialize_FreeHandle);
+  TFTPU_ADD_FN_IN_STRUCT(TpuExecutable_Deserialize);
   TFTPU_ADD_FN_IN_STRUCT(TpuExecutable_HloModule);
   TFTPU_ADD_FN_IN_STRUCT(TpuExecutable_Free);
 
   TFTPU_ADD_FN_IN_STRUCT(XlaShapeToTpuShapeRepresentation);
   TFTPU_ADD_FN_IN_STRUCT(XlaShapeToTpuPaddedShape);
+
+  TFTPU_ADD_FN_IN_STRUCT(TpuAsyncCollectiveOffloadHelper_Init);
+  TFTPU_ADD_FN_IN_STRUCT(TpuAsyncCollectiveOffloadHelper_Shutdown);
 };
 }
 

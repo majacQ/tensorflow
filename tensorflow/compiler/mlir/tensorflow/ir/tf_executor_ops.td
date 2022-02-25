@@ -41,6 +41,8 @@ def TfExecutor_Dialect : Dialect {
     last returned value (exceptions are `tf_executor.NextIteration.graph`,
     `tf_executor.NextIteration.sink` and `tf_executor.fetch` which don’t return any
     value).
+
+  let emitAccessorPrefix = kEmitAccessorPrefix_Raw;
 }];
 
   let cppNamespace = "::mlir::tf_executor";
@@ -72,10 +74,10 @@ def ControlOperandsAfterAllData :
 
 // Base class for the operation in this dialect, it'll forward the verifier,
 // printer, and parser to free functions.
-class TfExecutor_Op<string mnemonic, list<OpTrait> traits = []> :
+class TfExecutor_Op<string mnemonic, list<Trait> traits = []> :
     Op<TfExecutor_Dialect, mnemonic, traits> {
 
-  let verifier = [{ return ::mlir::tf_executor::Verify(*this); }];
+  let hasVerifier = 1;
   let printer = [{ return ::mlir::tf_executor::Print(*this, p); }];
   let parser = [{ return Parse$cppClass(parser, result); }];
 }
@@ -144,7 +146,7 @@ def TfExecutor_FetchOp : TfExecutor_Op<"fetch",
   );
 
   let builders = [
-    OpBuilderDAG<(ins),
+    OpBuilder<(ins),
     [{
       build($_builder, $_state, {});
     }]>
@@ -152,7 +154,7 @@ def TfExecutor_FetchOp : TfExecutor_Op<"fetch",
 
   let assemblyFormat = "($fetches^ `:` type($fetches))? attr-dict";
 
-  let verifier = ?;
+  let hasVerifier = 0;
   let printer = ?;
   let parser = ?;
 }
@@ -229,7 +231,7 @@ def TfExecutor_YieldOp : TfExecutor_Op<"yield",
   );
 
   let builders = [
-    OpBuilderDAG<(ins),
+    OpBuilder<(ins),
     [{
       build($_builder, $_state, {});
     }]>
@@ -237,7 +239,7 @@ def TfExecutor_YieldOp : TfExecutor_Op<"yield",
 
   let assemblyFormat = "($fetches^ `:` type($fetches))? attr-dict";
 
-  let verifier = ?;
+  let hasVerifier = 0;
   let printer = ?;
   let parser = ?;
 }
@@ -285,7 +287,7 @@ def TfExecutor_SwitchOp : TfExecutor_Op<"Switch",
     TfeControlType: $control
   );
 
-   let verifier = ?;
+   let hasVerifier = 0;
 }
 
 def TfExecutor_SwitchNOp : TfExecutor_Op<"_SwitchN",
@@ -411,7 +413,7 @@ def TfExecutor_EnterOp : TfExecutor_Op<"Enter",
     TfeControlType:$control
   );
 
-  let verifier = ?;
+  let hasVerifier = 0;
 }
 
 def TfExecutor_NextIterationSourceOp : TfExecutor_Op<"NextIteration.Source",
@@ -460,7 +462,7 @@ def TfExecutor_NextIterationSourceOp : TfExecutor_Op<"NextIteration.Source",
   );
 
   let builders = [
-    OpBuilderDAG<(ins "Type":$result_type,
+    OpBuilder<(ins "Type":$result_type,
       CArg<"ArrayRef<NamedAttribute>", "{}">:$attributes),
     [{
       Type token_type = TokenType::get($_builder.getContext());
@@ -530,7 +532,7 @@ def TfExecutor_NextIterationSinkOp : TfExecutor_Op<"NextIteration.Sink",
   );
 
   let builders = [
-    OpBuilderDAG<(ins "Value":$token, "ArrayRef<Value>":$operands,
+    OpBuilder<(ins "Value":$token, "ArrayRef<Value>":$operands,
       CArg<"ArrayRef<NamedAttribute>", "{}">:$attributes),
     [{
       assert(operands.size() >= 1 && "tf_executor.NextIteration.Sink builder "
@@ -590,7 +592,7 @@ def TfExecutor_ExitOp : TfExecutor_Op<"Exit",
     TfeControlType:$control
   );
 
-  let verifier = ?;
+  let hasVerifier = 0;
 }
 
 def TfExecutor_ControlTriggerOp : TfExecutor_Op<"ControlTrigger",
@@ -613,12 +615,12 @@ def TfExecutor_ControlTriggerOp : TfExecutor_Op<"ControlTrigger",
     TfeControlType:$control
   );
 
-  let verifier = ?;
+  let hasVerifier = 0;
 
   let hasCanonicalizer = 1;
 
   let builders = [
-    OpBuilderDAG<(ins "ArrayRef<Value>":$operands,
+    OpBuilder<(ins "ArrayRef<Value>":$operands,
       CArg<"ArrayRef<NamedAttribute>", "{}">:$attributes),
     [{
       assert(operands.size() >= 1 && "tf_executor.ControlTrigger builder "
@@ -669,7 +671,7 @@ def TfExecutor_LoopCondOp : TfExecutor_Op<"LoopCond",
     TfeControlType:$control
   );
 
-  let verifier = ?;
+  let hasVerifier = 0;
 }
 
 #endif // TF_EXECUTOR_DIALECT

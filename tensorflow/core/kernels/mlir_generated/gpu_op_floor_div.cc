@@ -13,12 +13,25 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 #include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
-#include "tensorflow/core/kernels/mlir_generated/gpu_ops_base.h"
+#include "tensorflow/core/kernels/mlir_generated/base_gpu_op.h"
 
 namespace tensorflow {
 
-GENERATE_AND_REGISTER_BINARY_KERNEL(FloorDiv, f16, DT_HALF, Eigen::half);
-GENERATE_AND_REGISTER_BINARY_KERNEL(FloorDiv, f32, DT_FLOAT, float);
-GENERATE_AND_REGISTER_BINARY_KERNEL(FloorDiv, f64, DT_DOUBLE, double);
+// The aliased kernels for data types DT_UINT8 and DT_UINT16 are registered in
+// gpu_op_div.cc, because they alias the Div kernel.
+
+// These kernels are JIT-compiled.
+#if defined(MLIR_GENERATED_EXPERIMENTAL_KERNELS_ENABLED)
+GENERATE_AND_REGISTER_BINARY_JIT_GPU_KERNEL(FloorDiv, DT_INT8);
+GENERATE_AND_REGISTER_BINARY_JIT_GPU_KERNEL(FloorDiv, DT_UINT32);
+GENERATE_AND_REGISTER_BINARY_JIT_GPU_KERNEL(FloorDiv, DT_UINT64);
+#endif
+
+GENERATE_AND_REGISTER_BINARY_GPU_KERNEL(FloorDiv, DT_INT16);
+GENERATE_AND_REGISTER_BINARY_GPU_KERNEL(FloorDiv, DT_INT64);
+
+GENERATE_AND_REGISTER_BINARY_GPU_KERNEL(FloorDiv, DT_HALF);
+GENERATE_AND_REGISTER_BINARY_GPU_KERNEL(FloorDiv, DT_FLOAT);
+GENERATE_AND_REGISTER_BINARY_GPU_KERNEL(FloorDiv, DT_DOUBLE);
 
 }  // namespace tensorflow

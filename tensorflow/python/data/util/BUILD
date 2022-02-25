@@ -2,10 +2,8 @@ load("//tensorflow:tensorflow.bzl", "py_test")
 
 package(
     default_visibility = ["//tensorflow:internal"],
-    licenses = ["notice"],  # Apache 2.0
+    licenses = ["notice"],
 )
-
-exports_files(["LICENSE"])
 
 py_library(
     name = "nest",
@@ -22,13 +20,14 @@ py_test(
     size = "small",
     srcs = ["nest_test.py"],
     python_version = "PY3",
-    srcs_version = "PY2AND3",
+    srcs_version = "PY3",
     deps = [
         ":nest",
         "//tensorflow/python:array_ops",
         "//tensorflow/python:client_testlib",
         "//tensorflow/python:framework_for_generated_wrappers",
         "//tensorflow/python:math_ops",
+        "//tensorflow/python/data/kernel_tests:test_base",
         "//tensorflow/python/ops/ragged",
         "//third_party/py/numpy",
     ],
@@ -41,11 +40,11 @@ py_library(
     deps = [
         ":nest",
         "//tensorflow/python:dtypes",
-        "//tensorflow/python:ops",
         "//tensorflow/python:sparse_ops",
         "//tensorflow/python:sparse_tensor",
         "//tensorflow/python:tensor_shape",
         "//tensorflow/python:util",
+        "//tensorflow/python/user_ops:ops",
         "@six_archive//:six",
     ],
 )
@@ -55,7 +54,7 @@ py_test(
     size = "small",
     srcs = ["sparse_test.py"],
     python_version = "PY3",
-    srcs_version = "PY2AND3",
+    srcs_version = "PY3",
     deps = [
         ":nest",
         ":sparse",
@@ -63,6 +62,7 @@ py_test(
         "//tensorflow/python:dtypes",
         "//tensorflow/python:sparse_tensor",
         "//tensorflow/python:tensor_shape",
+        "//tensorflow/python/data/kernel_tests:test_base",
     ],
 )
 
@@ -74,14 +74,14 @@ py_library(
         ":nest",
         "//tensorflow/python:dtypes",
         "//tensorflow/python:framework_ops",
-        "//tensorflow/python:ops",
         "//tensorflow/python:sparse_ops",
         "//tensorflow/python:sparse_tensor",
         "//tensorflow/python:tensor_array_ops",
         "//tensorflow/python:tensor_shape",
         "//tensorflow/python:tensor_util",
         "//tensorflow/python:util",
-        "//tensorflow/python/ops/ragged",
+        "//tensorflow/python/ops/ragged:ragged_tensor",
+        "//tensorflow/python/user_ops:ops",
         "@wrapt",
     ],
 )
@@ -91,7 +91,7 @@ py_test(
     size = "small",
     srcs = ["structure_test.py"],
     python_version = "PY3",
-    srcs_version = "PY2AND3",
+    srcs_version = "PY3",
     deps = [
         ":nest",
         ":structure",
@@ -128,10 +128,11 @@ py_test(
     size = "small",
     srcs = ["options_test.py"],
     python_version = "PY3",
-    srcs_version = "PY2AND3",
+    srcs_version = "PY3",
     deps = [
         ":options",
         "//tensorflow/python:client_testlib",
+        "//tensorflow/python/data/kernel_tests:test_base",
     ],
 )
 
@@ -152,12 +153,13 @@ py_test(
     size = "small",
     srcs = ["convert_test.py"],
     python_version = "PY3",
-    srcs_version = "PY2AND3",
+    srcs_version = "PY3",
     deps = [
         ":convert",
         "//tensorflow/python:client_testlib",
         "//tensorflow/python:framework_for_generated_wrappers",
         "//tensorflow/python:util",
+        "//tensorflow/python/data/kernel_tests:test_base",
     ],
 )
 
@@ -177,12 +179,13 @@ py_test(
     size = "small",
     srcs = ["random_seed_test.py"],
     python_version = "PY3",
-    srcs_version = "PY2AND3",
+    srcs_version = "PY3",
     deps = [
         ":random_seed",
         "//tensorflow/python:client_testlib",
         "//tensorflow/python:framework_for_generated_wrappers",
         "//tensorflow/python:util",
+        "//tensorflow/python/data/kernel_tests:test_base",
     ],
 )
 
@@ -199,11 +202,14 @@ py_test(
     size = "small",
     srcs = ["traverse_test.py"],
     python_version = "PY3",
-    srcs_version = "PY2AND3",
+    srcs_version = "PY3",
     deps = [
         ":traverse",
         "//tensorflow/python:client_testlib",
         "//tensorflow/python:framework_for_generated_wrappers",
+        "//tensorflow/python/data/experimental/kernel_tests/service:test_base",
+        "//tensorflow/python/data/experimental/ops:dataset_ops",
+        "//tensorflow/python/data/kernel_tests:test_base",
         "//tensorflow/python/data/ops:dataset_ops",
     ],
 )

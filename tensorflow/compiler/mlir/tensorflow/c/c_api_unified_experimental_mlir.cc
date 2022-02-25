@@ -77,8 +77,10 @@ using tensorflow::tracing::TracingTensorHandle;
 namespace {
 
 void RegisterDialects(mlir::MLIRContext& ctx) {
-  mlir::RegisterAllTensorFlowDialects(ctx.getDialectRegistry());
-  ctx.getDialectRegistry().loadAll(&ctx);
+  mlir::DialectRegistry registry;
+  mlir::RegisterAllTensorFlowDialects(registry);
+  ctx.appendDialectRegistry(registry);
+  ctx.loadAllAvailableDialects();
 }
 
 Status ConvertDataTypeToTensor(tensorflow::DataType dtype, Builder builder,
@@ -216,7 +218,7 @@ class MlirAbstractOp : public TracingOperation {
 class MlirFunction : public AbstractFunction {
  public:
   explicit MlirFunction(std::unique_ptr<MLIRContext> context,
-                        OwningModuleRef module, FuncOp func)
+                        OwningOpRef<mlir::ModuleOp> module, FuncOp func)
       : AbstractFunction(kMlir),
         context_(std::move(context)),
         module_(std::move(module)),
@@ -231,7 +233,7 @@ class MlirFunction : public AbstractFunction {
 
  private:
   std::unique_ptr<MLIRContext> context_;
-  OwningModuleRef module_;
+  OwningOpRef<mlir::ModuleOp> module_;
   FuncOp func_;
   std::unique_ptr<tensorflow::FunctionDef> fdef_;
 };
@@ -278,7 +280,7 @@ class MlirFunctionContext : public TracingContext {
   std::unique_ptr<MLIRContext> context_;
   OpBuilder builder_;
   FuncOp func_;
-  OwningModuleRef module_;
+  OwningOpRef<mlir::ModuleOp> module_;
 };
 
 Status MlirAbstractOp::Reset(const char* op, const char* device_name) {
@@ -461,7 +463,7 @@ Status MlirAbstractOp::SetAttrFloat(const char* attr_name, float value) {
   return Unimplemented("SetAttrFloat has not been implemented yet.");
 }
 Status MlirAbstractOp::SetAttrBool(const char* attr_name, bool value) {
-  attrs_[attr_name] = BoolAttr::get(value, context_);
+  attrs_[attr_name] = BoolAttr::get(context_, value);
   return Status::OK();
 }
 Status MlirAbstractOp::SetAttrShape(const char* attr_name, const int64_t* dims,
@@ -562,7 +564,8 @@ Status MlirFunctionContext::AddParameter(
   // resolved.
   Type type;
   TF_RETURN_IF_ERROR(ConvertDataTypeToTensor(dtype, builder_, &type));
-  *handle = new MlirTensor(func_.getBody().front().addArgument(type));
+  *handle =
+      new MlirTensor(func_.getBody().front().addArgument(type, func_.getLoc()));
   return Status::OK();
 }
 
@@ -646,7 +649,7 @@ Status MlirAbstractOp::AddInputList(
     types.reserve(inputs.size());
     for (AbstractTensorHandle* input : inputs)
       types.push_back(TypeAttr::get(cast<MlirTensor>(input)->getElementType()));
-    attrs_[arg_def.type_list_attr()] = ArrayAttr::get(types, GetContext());
+    attrs_[arg_def.type_list_attr()] = ArrayAttr::get(GetContext(), types);
   }
   return Status::OK();
 }

@@ -6,7 +6,7 @@ package(
     default_visibility = [
         "//tensorflow:internal",
     ],
-    licenses = ["notice"],  # Apache 2.0
+    licenses = ["notice"],
 )
 
 py_library(
@@ -185,3 +185,21 @@ tf_py_test(
         "//tensorflow/python:training_server_lib",
     ],
 )
+
+# copybara:uncomment_begin(google-only)
+# tf_py_test(
+#     name = "brain_jobs_cluster_resolver_test",
+#     size = "small",
+#     srcs = ["brain_jobs_cluster_resolver_test.py"],
+#     grpc_enabled = True,
+#     main = "brain_jobs_cluster_resolver_test.py",
+#     deps = [
+#         ":brain_jobs_cluster_resolver_py",
+#         "//tensorflow/python:client_testlib",
+#         "//tensorflow/python:framework_for_generated_wrappers",
+#         "//tensorflow/python:framework_test_lib",
+#         "//tensorflow/python:platform_test",
+#         "//tensorflow/python:training_server_lib",
+#     ],
+# )
+# copybara:uncomment_end
