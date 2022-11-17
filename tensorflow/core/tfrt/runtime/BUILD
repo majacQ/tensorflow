@@ -3,6 +3,7 @@ load("//tensorflow/core/platform:rules_cc.bzl", "cc_library")
 load("//tensorflow:tensorflow.bzl", "tf_cc_test")
 
 package(
+    # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
     default_visibility = [":friends"],
     licenses = ["notice"],
 )
@@ -11,13 +12,13 @@ package_group(
     name = "friends",
     packages = [
         # Authorized users go here.
-        "//platforms/xla/tests/gpu/...",
         "//tensorflow/compiler/xla/service/gpu/...",
         "//tensorflow/core/tfrt/...",
         "//tensorflow/core/runtime_fallback/...",
         # copybara:uncomment "//tensorflow_serving/...",
         # copybara:uncomment "//learning/brain/experimental/tfrt/...",
         # copybara:uncomment "//learning/brain/tfrt/...",
+        # copybara:uncomment "//learning/infra/mira/...",
     ],
 )
 
@@ -59,7 +60,6 @@ cc_library(
         "//tensorflow/core/platform:threadpool_interface",
         "//tensorflow/core/profiler/lib:connected_traceme",
         "//tensorflow/core/profiler/lib:traceme_encode",
-        "//tensorflow/core/tfrt/utils:statusor",
         "@tf_runtime//:hostcontext",
         "@tf_runtime//:support",
     ],
@@ -86,11 +86,12 @@ cc_library(
     deps = [
         ":work_queue_interface",
         "//tensorflow/core:framework_lite",
+        "//tensorflow/core:lib",
         "//tensorflow/core/platform:errors",
         "//tensorflow/core/platform:status",
         "//tensorflow/core/platform:threadpool_interface",
+        "//tensorflow/core/tfrt/utils:thread_pool",
         "@llvm-project//llvm:Support",
-        "@tf_runtime//:dtype",
         "@tf_runtime//:hostcontext",
         "@tf_runtime//:support",
     ],

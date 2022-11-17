@@ -6,24 +6,14 @@
 load("//tensorflow/core/platform:rules_cc.bzl", "cc_library")
 load(
     "//tensorflow:tensorflow.bzl",
-    "tf_cc_test",
+    "VERSION",
+    "if_google",
     "tf_copts",
     "tf_cuda_library",
     "tf_custom_op_library_additional_deps",
     "tf_gen_op_wrapper_py",
 )
-
-# buildifier: disable=same-origin-load
-load("//tensorflow:tensorflow.bzl", "tf_cuda_cc_test")
-
-# buildifier: disable=same-origin-load
-load("//tensorflow:tensorflow.bzl", "tf_custom_op_py_library")
-
-# buildifier: disable=same-origin-load
-load("//tensorflow:tensorflow.bzl", "pybind_ccsharedlib_extension")
-
-# buildifier: disable=same-origin-load
-load("//tensorflow:tensorflow.bzl", "tf_gen_op_libs")
+load("//tensorflow:tensorflow.default.bzl", "pybind_extension", "tf_cuda_cc_test", "tf_custom_op_py_library", "tf_gen_op_libs")
 load(
     "//tensorflow/core/platform:build_config.bzl",
     "tf_additional_all_protos",
@@ -31,13 +21,42 @@ load(
 )
 load("@local_config_tensorrt//:build_defs.bzl", "if_tensorrt")
 
+# Platform specific build config
+load(
+    "//tensorflow/core/platform:build_config_root.bzl",
+    "if_static",
+)
+
 package(
+    # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
     default_visibility = ["//visibility:public"],
     features = [
         "-layering_check",
         "-parse_headers",
     ],
     licenses = ["notice"],
+)
+
+# Whether or not to use the EfficientNMSPlugin from NVIDIA OSS archive.
+config_setting(
+    name = "use_efficient_nms_plugin",
+    define_values = {"use_efficient_nms_plugin": "1"},
+)
+
+# Config setting to conditionally link GPU targets.
+alias(
+    name = "efficient_nms_plugin_wrapper",
+    actual = if_google(
+        "//third_party/tensorrt/plugin:nvinfer_plugin_nms",
+        "@tensorrt_oss_archive//:nvinfer_plugin_nms",
+    ),
+)
+
+cc_library(
+    name = "efficient_nms_plugin",
+    deps = if_tensorrt([
+        ":efficient_nms_plugin_wrapper",
+    ]),
 )
 
 cc_library(
@@ -50,7 +69,7 @@ cc_library(
     deps = if_tensorrt([
         "@local_config_tensorrt//:tensorrt_headers",
         "//tensorflow/core:lib",
-        "//tensorflow/stream_executor/platform:dso_loader",
+        "//tensorflow/compiler/xla/stream_executor/platform:dso_loader",
     ]),
 )
 
@@ -69,6 +88,10 @@ tf_cuda_cc_test(
     srcs = [
         "tensorrt_test.cc",
     ],
+    extra_copts = select({
+        ":use_efficient_nms_plugin": ["-DTF_TRT_USE_EFFICIENT_NMS_PLUGIN=1"],
+        "//conditions:default": [],
+    }),
     tags = [
         "no_cuda_on_cpu_tap",
         "no_windows",
@@ -77,15 +100,17 @@ tf_cuda_cc_test(
     deps = [
         ":trt_logging",
         ":utils",
-        "//tensorflow/core/common_runtime/gpu:gpu_init",
+        "//tensorflow/compiler/xla/stream_executor/gpu:gpu_init",
         "//tensorflow/core:lib",
         "//tensorflow/core/platform:stream_executor",
         "//tensorflow/core:test",
         "//tensorflow/core:test_main",
     ] + if_tensorrt([
         ":tensorrt_lib",
-        "@local_config_tensorrt//plugin:nvinfer_plugin_nms",
-    ]),
+    ]) + select({
+        ":use_efficient_nms_plugin": [":efficient_nms_plugin"],
+        "//conditions:default": [],
+    }),
 )
 
 cc_library(
@@ -98,12 +123,21 @@ cc_library(
     deps = [
         ":trt_parameters",
         ":trt_resources",
+        "//tensorflow/cc/tools:freeze_saved_model",
         "//tensorflow/core:direct_session",
         "//tensorflow/core:framework",
         "//tensorflow/core/grappler:grappler_item_builder",
+        "//tensorflow/core/grappler/clusters:single_machine",
         "//tensorflow/core/platform:logging",
         "@com_google_absl//absl/strings",
     ] + if_tensorrt([":tensorrt_lib"]),
+)
+
+filegroup(
+    name = "headers",
+    srcs = [
+        "trt_convert_api.h",
+    ],
 )
 
 tf_cuda_cc_test(
@@ -125,11 +159,14 @@ tf_cuda_cc_test(
         ":trt_resources",
         ":utils",
         "//tensorflow/cc:cc_ops",
+        "//tensorflow/cc:resource_variable_ops",
         "//tensorflow/cc:scope",
         "//tensorflow/core:array_ops_op_lib",
         "//tensorflow/core:core_cpu",
+        "//tensorflow/core:core_cpu_internal",
         "//tensorflow/core:direct_session",
         "//tensorflow/core:framework",
+        "//tensorflow/core:function_ops_op_lib",
         "//tensorflow/core:lib",
         "//tensorflow/core:lib_internal",
         "//tensorflow/core:math_ops_op_lib",
@@ -139,8 +176,11 @@ tf_cuda_cc_test(
         "//tensorflow/core:state_ops_op_lib",
         "//tensorflow/core:test",
         "//tensorflow/core:test_main",
+        "//tensorflow/core:testlib",
         "//tensorflow/core/kernels:array",
+        "//tensorflow/core/kernels:assign_op",
         "//tensorflow/core/kernels:ops_testutil",
+        "//tensorflow/core/kernels:partitioned_function_ops",
         "//tensorflow/core/kernels:resource_variable_ops",
     ],
 )
@@ -156,6 +196,7 @@ cc_library(
     deps = [
         "//tensorflow/core:framework",
         "//tensorflow/core/platform:logging",
+        "//tensorflow/core/profiler/lib:traceme",
     ] + if_tensorrt([":tensorrt_lib"]),
 )
 
@@ -167,7 +208,7 @@ cc_library(
         "utils/trt_testutils.h",
     ],
     copts = tf_copts(),
-    visibility = ["//tensorflow:internal"],
+    visibility = ["//visibility:private"],
     deps = [
         ":trt_conversion",
         "@com_google_absl//absl/strings",
@@ -225,6 +266,7 @@ cc_library(
         "//tensorflow/core:stream_executor_headers_lib",
         "//tensorflow/core/common_runtime:core_cpu_lib_no_ops",
         "//tensorflow/core/grappler/costs:graph_properties",
+        "//tensorflow/core/profiler/lib:traceme",
     ] + if_tensorrt([
         ":tensorrt_lib",
         "@local_config_cuda//cuda:cuda_headers",
@@ -250,6 +292,7 @@ cc_library(
         "//tensorflow/core:lib",
         "//tensorflow/core:lib_internal",
         "//tensorflow/core:lib_proto_parsing",
+        "//tensorflow/core/profiler/lib:traceme",
     ] + if_tensorrt([":tensorrt_lib"]) + tf_custom_op_library_additional_deps(),
     alwayslink = 1,
 )
@@ -340,7 +383,6 @@ cc_library(
     name = "trt_op_libs",
     deps = [
         ":get_calibration_data_op_op_lib",
-        ":trt_convert_api",
         ":trt_engine_op_op_lib",
         ":trt_engine_utils",
     ],
@@ -368,6 +410,7 @@ tf_cuda_library(
         "//tensorflow/core:framework_headers_lib",
         "//tensorflow/core:lib",
         "//tensorflow/core/platform:status",
+        "//tensorflow/core/profiler/lib:traceme",
         "//tensorflow/core:stream_executor_headers_lib",
     ] + if_tensorrt([":tensorrt_lib"]),
 )
@@ -380,6 +423,8 @@ tf_cuda_library(
     deps = [
         ":common_utils",
         ":logger_registry",
+        ":utils",
+        "@com_google_absl//absl/strings",
         "//tensorflow/core:lib_proto_parsing",
     ] + if_tensorrt([":tensorrt_lib"]),
 )
@@ -458,7 +503,7 @@ tf_cuda_library(
     ] + if_tensorrt([":tensorrt_lib"]),
 )
 
-tf_cc_test(
+tf_cuda_cc_test(
     name = "trt_allocator_test",
     size = "small",
     srcs = ["utils/trt_allocator_test.cc"],
@@ -473,7 +518,7 @@ tf_cc_test(
     ],
 )
 
-tf_cc_test(
+tf_cuda_cc_test(
     name = "trt_lru_cache_test",
     size = "small",
     srcs = ["utils/trt_lru_cache_test.cc"],
@@ -543,9 +588,29 @@ tf_cuda_library(
     ] + if_tensorrt([":tensorrt_lib"]),
 )
 
+# This rule contains static variables for the converter registry. Do not depend
+# on it directly; use :op_converter_registry, and link against
+# libtensorflow_framework.so for the registry symbols. The library
+# libtensorflow_framework.so depends on this target so that users can
+# register custom op converters without the need to incorporate Tensorflow into
+# their build system.
+tf_cuda_library(
+    name = "op_converter_registry_impl",
+    srcs = ["convert/op_converter_registry.cc"],
+    hdrs = [
+        "convert/op_converter_registry.h",
+    ],
+    visibility = ["//tensorflow:__subpackages__"],
+    deps = [
+        ":utils",
+        ":op_converter",
+        "@com_google_absl//absl/strings",
+        "//tensorflow/core:lib",
+    ] + if_tensorrt([":tensorrt_lib"]),
+)
+
 tf_cuda_library(
     name = "op_converter_registry",
-    srcs = ["convert/op_converter_registry.cc"],
     hdrs = [
         "convert/op_converter_registry.h",
     ],
@@ -553,9 +618,8 @@ tf_cuda_library(
     deps = [
         ":utils",
         ":op_converter",
-        "@com_google_absl//absl/strings",
         "//tensorflow/core:lib",
-    ] + if_tensorrt([":tensorrt_lib"]),
+    ] + if_static([":op_converter_registry_impl"]),
 )
 
 tf_cuda_cc_test(
@@ -573,15 +637,49 @@ tf_cuda_cc_test(
     ],
 )
 
+tf_cuda_library(
+    name = "algorithm_selector",
+    srcs = [
+        "convert/algorithm_selector.cc",
+    ],
+    hdrs = [
+        "convert/algorithm_selector.h",
+    ],
+    deps = [":common_utils"] + if_tensorrt([":tensorrt_lib"]),
+)
+
+tf_cuda_cc_test(
+    name = "algorithm_selector_test",
+    srcs = [
+        "convert/algorithm_selector_test.cc",
+    ],
+    deps = [
+        ":algorithm_selector",
+        "//tensorflow/core:test",
+        "//tensorflow/core:test_main",
+    ] + if_tensorrt([":tensorrt_lib"]),
+)
+
 # Library for the node-level conversion portion of TensorRT operation creation
 tf_cuda_library(
     name = "trt_conversion",
     srcs = [
         "convert/convert_graph.cc",
         "convert/convert_nodes.cc",
+        "convert/ops/binary_ops.cc",
         "convert/ops/data_format_vec_permute.cc",
+        "convert/ops/einsum.cc",
+        "convert/ops/fill_ops.cc",
+        "convert/ops/like_ops.cc",
+        "convert/ops/log_softmax.cc",
         "convert/ops/quantization_ops.cc",
+        "convert/ops/selectv2.cc",
         "convert/ops/slice_ops.cc",
+        "convert/ops/softmax.cc",
+        "convert/ops/tile.cc",
+        "convert/ops/unary_ops.cc",
+        "convert/ops/variable_ops.cc",
+        "convert/timing_cache.cc",
         "convert/trt_optimization_pass.cc",
     ],
     hdrs = [
@@ -590,9 +688,15 @@ tf_cuda_library(
         "convert/ops/layer_utils.h",
         "convert/ops/quantization_ops.h",
         "convert/ops/slice_ops.h",
+        "convert/timing_cache.h",
         "convert/trt_optimization_pass.h",
     ],
+    copts = tf_copts() + select({
+        ":use_efficient_nms_plugin": ["-DTF_TRT_USE_EFFICIENT_NMS_PLUGIN=1"],
+        "//conditions:default": [],
+    }),
     deps = [
+        ":algorithm_selector",
         ":common_utils",
         ":logger_registry",
         ":segment",
@@ -620,7 +724,6 @@ tf_cuda_library(
         "//tensorflow/core:framework_lite",
         "//tensorflow/core:gpu_runtime",
         "//tensorflow/core:graph",
-        "//tensorflow/core/kernels/linalg:einsum_op",
         "//tensorflow/core:lib",
         "//tensorflow/core:lib_internal",
         "//tensorflow/core:protos_all_cc",
@@ -628,10 +731,14 @@ tf_cuda_library(
         "//tensorflow/core/grappler/clusters:virtual_cluster",
         "//tensorflow/core/grappler/costs:graph_properties",
         "//tensorflow/core/grappler/optimizers:meta_optimizer",
+        "//tensorflow/core/profiler/lib:traceme",
         "//tensorflow/core/profiler/lib:annotated_traceme",
-        "//tensorflow/stream_executor/lib",
+        "//tensorflow/compiler/xla/stream_executor/lib",
         "//tensorflow/tools/graph_transforms:transform_utils",
-    ] + if_tensorrt([":tensorrt_lib"]) + tf_custom_op_library_additional_deps(),
+    ] + if_tensorrt([":tensorrt_lib"]) + tf_custom_op_library_additional_deps() + select({
+        ":use_efficient_nms_plugin": [":efficient_nms_plugin"],
+        "//conditions:default": [],
+    }),
     alwayslink = 1,
 )
 
@@ -700,8 +807,10 @@ tf_cuda_cc_test(
         "//tensorflow/core:lib",
         "//tensorflow/core:protos_all_cc",
         "//tensorflow/core/framework:tensor_testutil",
+        "//tensorflow/core/kernels:function_ops",
+        "//tensorflow/core/kernels:identity_op",
+        "//tensorflow/core/kernels:resource_variable_ops",
         "//tensorflow/core:test",
-        "//tensorflow/core:test_main",
         "//tensorflow/core/platform:status_matchers",
     ] + if_tensorrt([
         ":tensorrt_lib",
@@ -723,6 +832,7 @@ tf_cuda_cc_test(
     deps = [
         ":trt_logging",
         ":trt_conversion",
+        ":trt_convert_api",
         ":trt_plugins",
         ":trt_engine_utils",
         ":trt_op_kernels",
@@ -794,6 +904,7 @@ cc_library(
         "//tensorflow/core:protos_all_cc",
         "//tensorflow/core/common_runtime:core_cpu",
         "//tensorflow/core/grappler/costs:graph_properties",
+        "//tensorflow/core/profiler/lib:traceme",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
@@ -836,10 +947,14 @@ tf_cuda_library(
 
 cc_library(
     name = "utils",
-    srcs = ["convert/utils.cc"],
+    srcs = [
+        "convert/utils.cc",
+        "utils/trt_experimental_features.cc",
+    ],
     hdrs = [
         "common/utils.h",
         "convert/utils.h",
+        "utils/trt_experimental_features.h",
         "utils/trt_tensor_proxy.h",
     ],
     copts = tf_copts(),
@@ -860,11 +975,10 @@ tf_proto_library(
     protodeps = tf_additional_all_protos(),
 )
 
-cc_library(
+tf_cuda_library(
     name = "py_utils",
     srcs = ["utils/py_utils.cc"],
     hdrs = ["utils/py_utils.h"],
-    copts = tf_copts(),
     local_defines = select({
         "@local_config_tensorrt//:use_static_tensorrt": ["TF_USE_TENSORRT_STATIC=1"],
         "//conditions:default": [],
@@ -872,17 +986,20 @@ cc_library(
     deps = if_tensorrt([
         ":common_utils",
         ":tensorrt_lib",
-        "//tensorflow/stream_executor/platform:dso_loader",
+        ":op_converter_registry",
+        "//tensorflow/compiler/xla/stream_executor/platform:dso_loader",
     ]),
 )
 
-pybind_ccsharedlib_extension(
+pybind_extension(
     name = "_pywrap_py_utils",
     srcs = ["utils/py_utils_wrapper.cc"],
-    link_in_framework = True,
-    module_name = "_pywrap_py_utils",
+    dynamic_deps = select({
+        "//tensorflow:macos": ["//tensorflow:libtensorflow_framework.%s.dylib" % VERSION],
+        "//conditions:default": ["//tensorflow:libtensorflow_framework.so.%s" % VERSION],
+        "//tensorflow:windows": [],
+    }),
     static_deps = [
-        # copybara:comment_begin(oss only)
         "@bazel_tools//:__subpackages__",
         "@boringssl//:__subpackages__",
         "@com_github_googlecloudplatform_tensorflow_gcp_tools//:__subpackages__",
@@ -900,7 +1017,6 @@ pybind_ccsharedlib_extension(
         "@hwloc//:__subpackages__",
         "@jsoncpp_git//:__subpackages__",
         "@libjpeg_turbo//:__subpackages__",
-        "@libxsmm_archive//:__subpackages__",
         "@llvm_openmp//:__subpackages__",
         "@llvm-project//:__subpackages__",
         "@llvm_terminfo//:__subpackages__",
@@ -917,11 +1033,11 @@ pybind_ccsharedlib_extension(
         "@snappy//:__subpackages__",
         "//:__subpackages__",
         "@zlib//:__subpackages__",
-        # copybara:comment_end
     ],
     deps = [
         ":common_utils",
         ":py_utils",
+        "//tensorflow/compiler/xla/stream_executor",
         "//tensorflow/core/platform:env",
         "//tensorflow/core/platform:logging",
         "//tensorflow/core/platform:status",

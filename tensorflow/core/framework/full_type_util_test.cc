@@ -18,6 +18,7 @@ limitations under the License.
 #include "tensorflow/core/framework/node_def.pb.h"
 #include "tensorflow/core/framework/node_def_util.h"
 #include "tensorflow/core/framework/op.h"
+#include "tensorflow/core/framework/op_def.pb.h"
 #include "tensorflow/core/framework/types.pb.h"
 #include "tensorflow/core/lib/core/status_test_util.h"
 #include "tensorflow/core/platform/test.h"
@@ -132,6 +133,479 @@ TEST(VariadicTensorContainer, Basic) {
   EXPECT_EQ(t.args(0).args(2).type_id(), TFT_VAR);
   EXPECT_EQ(t.args(0).args(2).args_size(), 0);
   EXPECT_EQ(t.args(0).args(2).s(), "T");
+}
+
+TEST(SpecializeType, Fixed) {
+  OpDef op;
+  FullTypeDef* t = op.add_output_arg()->mutable_experimental_full_type();
+  t->set_type_id(TFT_ARRAY);
+  t->add_args()->set_type_id(TFT_TENSOR);
+  t->mutable_args(0)->add_args()->set_type_id(TFT_INT32);
+  t->add_args()->set_type_id(TFT_DATASET);
+  t->mutable_args(1)->add_args()->set_type_id(TFT_FLOAT);
+
+  AttrSlice empty;
+
+  FullTypeDef ft;
+  TF_ASSERT_OK(SpecializeType(empty, op, ft));
+
+  EXPECT_EQ(ft.type_id(), TFT_PRODUCT);
+  EXPECT_EQ(ft.args_size(), 1);
+
+  const FullTypeDef& t_actual = ft.args(0);
+  EXPECT_EQ(t_actual.type_id(), TFT_ARRAY);
+  EXPECT_EQ(t_actual.args_size(), 2);
+  EXPECT_EQ(t_actual.args(0).type_id(), TFT_TENSOR);
+  EXPECT_EQ(t_actual.args(0).args_size(), 1);
+  EXPECT_EQ(t_actual.args(0).args(0).type_id(), TFT_INT32);
+  EXPECT_EQ(t_actual.args(0).args(0).args_size(), 0);
+  EXPECT_EQ(t_actual.args(1).type_id(), TFT_DATASET);
+  EXPECT_EQ(t_actual.args(1).args_size(), 1);
+  EXPECT_EQ(t_actual.args(1).args(0).type_id(), TFT_FLOAT);
+  EXPECT_EQ(t_actual.args(1).args(0).args_size(), 0);
+}
+
+TEST(SpecializeType, Idempotence) {
+  OpDef op;
+  FullTypeDef* t = op.add_output_arg()->mutable_experimental_full_type();
+  t->set_type_id(TFT_ARRAY);
+  t->add_args()->set_type_id(TFT_TENSOR);
+  t->mutable_args(0)->add_args()->set_type_id(TFT_INT32);
+  t->add_args()->set_type_id(TFT_DATASET);
+  t->mutable_args(1)->add_args()->set_type_id(TFT_FLOAT);
+
+  AttrSlice empty;
+
+  FullTypeDef ft;
+  TF_ASSERT_OK(SpecializeType(empty, op, ft));
+  TF_ASSERT_OK(SpecializeType(empty, op, ft));
+
+  EXPECT_EQ(ft.type_id(), TFT_PRODUCT);
+  EXPECT_EQ(ft.args_size(), 1);
+}
+
+TEST(SpecializeType, VarExpandsFromSingleAttribute) {
+  OpDef op;
+  FullTypeDef* t = op.add_output_arg()->mutable_experimental_full_type();
+  t->set_type_id(TFT_ARRAY);
+  t->add_args()->set_type_id(TFT_TENSOR);
+  t->mutable_args(0)->add_args()->set_type_id(TFT_VAR);
+  t->mutable_args(0)->mutable_args(0)->set_s("T");
+
+  AttrValue attr;
+  attr.set_type(DT_INT32);
+  NodeDef ndef;
+  (*ndef.mutable_attr())["T"] = attr;
+
+  AttrSlice attrs(ndef);
+
+  FullTypeDef ft;
+  TF_ASSERT_OK(SpecializeType(attrs, op, ft));
+
+  EXPECT_EQ(ft.type_id(), TFT_PRODUCT);
+  EXPECT_EQ(ft.args_size(), 1);
+
+  const FullTypeDef& t_actual = ft.args(0);
+  EXPECT_EQ(t_actual.type_id(), TFT_ARRAY);
+  EXPECT_EQ(t_actual.args_size(), 1);
+  EXPECT_EQ(t_actual.args(0).type_id(), TFT_TENSOR);
+  EXPECT_EQ(t_actual.args(0).args_size(), 1);
+  EXPECT_EQ(t_actual.args(0).args(0).type_id(), TFT_INT32);
+  EXPECT_EQ(t_actual.args(0).args(0).args_size(), 0);
+}
+
+TEST(SpecializeType, VarExpandsFromDefaultForSingleAttribute) {
+  OpDef op;
+  FullTypeDef* t = op.add_output_arg()->mutable_experimental_full_type();
+  t->set_type_id(TFT_ARRAY);
+  t->add_args()->set_type_id(TFT_TENSOR);
+  t->mutable_args(0)->add_args()->set_type_id(TFT_VAR);
+  t->mutable_args(0)->mutable_args(0)->set_s("T");
+
+  AttrValue attr;
+  attr.set_type(DT_INT32);
+
+  // Create a default for attribute "T"
+  OpDef::AttrDef* attr_with_default = op.add_attr();
+  attr_with_default->set_name("T");
+  (*attr_with_default->mutable_default_value()) = attr;
+
+  NodeDef ndef;
+  // ndef does not specify the "T" attribute, so default value is used
+
+  AttrSlice attrs(ndef);
+
+  FullTypeDef ft;
+  TF_ASSERT_OK(SpecializeType(attrs, op, ft));
+
+  EXPECT_EQ(ft.type_id(), TFT_PRODUCT);
+  EXPECT_EQ(ft.args_size(), 1);
+
+  const FullTypeDef& t_actual = ft.args(0);
+  EXPECT_EQ(t_actual.type_id(), TFT_ARRAY);
+  EXPECT_EQ(t_actual.args_size(), 1);
+  EXPECT_EQ(t_actual.args(0).type_id(), TFT_TENSOR);
+  EXPECT_EQ(t_actual.args(0).args_size(), 1);
+  EXPECT_EQ(t_actual.args(0).args(0).type_id(), TFT_INT32);
+  EXPECT_EQ(t_actual.args(0).args(0).args_size(), 0);
+}
+
+TEST(SpecializeType, VarExpandsFromSingleElementTypeListAttribute) {
+  OpDef op;
+  FullTypeDef* t = op.add_output_arg()->mutable_experimental_full_type();
+  t->set_type_id(TFT_ARRAY);
+  t->add_args()->set_type_id(TFT_TENSOR);
+  t->mutable_args(0)->add_args()->set_type_id(TFT_VAR);
+  t->mutable_args(0)->mutable_args(0)->set_s("T");
+
+  AttrValue attr;
+  attr.mutable_list()->add_type(DT_INT32);
+  NodeDef ndef;
+  (*ndef.mutable_attr())["T"] = attr;
+
+  AttrSlice attrs(ndef);
+
+  FullTypeDef ft;
+  TF_ASSERT_OK(SpecializeType(attrs, op, ft));
+
+  EXPECT_EQ(ft.type_id(), TFT_PRODUCT);
+  EXPECT_EQ(ft.args_size(), 1);
+
+  const FullTypeDef& t_actual = ft.args(0);
+  EXPECT_EQ(t_actual.type_id(), TFT_ARRAY);
+  EXPECT_EQ(t_actual.args_size(), 1);
+  EXPECT_EQ(t_actual.args(0).type_id(), TFT_TENSOR);
+  EXPECT_EQ(t_actual.args(0).args_size(), 1);
+  EXPECT_EQ(t_actual.args(0).args(0).type_id(), TFT_INT32);
+  EXPECT_EQ(t_actual.args(0).args(0).args_size(), 0);
+}
+
+TEST(SpecializeType, VarRejectsMultipleElementTypeListAttribute) {
+  OpDef op;
+  FullTypeDef* t = op.add_output_arg()->mutable_experimental_full_type();
+  t->set_type_id(TFT_ARRAY);
+  t->add_args()->set_type_id(TFT_TENSOR);
+  t->mutable_args(0)->add_args()->set_type_id(TFT_VAR);
+  t->mutable_args(0)->mutable_args(0)->set_s("T");
+
+  AttrValue attr;
+  attr.mutable_list()->add_type(DT_INT32);
+  attr.mutable_list()->add_type(DT_FLOAT);
+  NodeDef ndef;
+  (*ndef.mutable_attr())["T"] = attr;
+
+  AttrSlice attrs(ndef);
+
+  FullTypeDef ft;
+  EXPECT_FALSE(SpecializeType(attrs, op, ft).ok());
+}
+
+TEST(SpecializeType, VarRejectsEmptyTypeListAttribute) {
+  OpDef op;
+  FullTypeDef* t = op.add_output_arg()->mutable_experimental_full_type();
+  t->set_type_id(TFT_ARRAY);
+  t->add_args()->set_type_id(TFT_TENSOR);
+  t->mutable_args(0)->add_args()->set_type_id(TFT_VAR);
+  t->mutable_args(0)->mutable_args(0)->set_s("T");
+
+  AttrValue attr;
+  attr.mutable_list();
+  NodeDef ndef;
+  (*ndef.mutable_attr())["T"] = attr;
+
+  AttrSlice attrs(ndef);
+
+  FullTypeDef ft;
+  EXPECT_FALSE(SpecializeType(attrs, op, ft).ok());
+}
+
+TEST(SpecializeType, ForEachExpandsFromSingleAttribute) {
+  OpDef op;
+  FullTypeDef* t = op.add_output_arg()->mutable_experimental_full_type();
+  t->set_type_id(TFT_FOR_EACH);
+  t->add_args()->set_type_id(TFT_PRODUCT);
+  t->add_args()->set_type_id(TFT_TENSOR);
+  t->mutable_args(1)->add_args()->set_type_id(TFT_VAR);
+  t->mutable_args(1)->mutable_args(0)->set_s("T");
+  t->add_args()->set_type_id(TFT_VAR);
+  t->mutable_args(2)->set_s("T");
+
+  AttrValue attr;
+  attr.set_type(DT_INT32);
+  NodeDef ndef;
+  (*ndef.mutable_attr())["T"] = attr;
+
+  AttrSlice attrs(ndef);
+
+  FullTypeDef ft;
+  TF_ASSERT_OK(SpecializeType(attrs, op, ft));
+
+  EXPECT_EQ(ft.type_id(), TFT_PRODUCT);
+  EXPECT_EQ(ft.args_size(), 1);
+
+  const FullTypeDef& t_actual = ft.args(0);
+  EXPECT_EQ(t_actual.type_id(), TFT_PRODUCT);
+  EXPECT_EQ(t_actual.args_size(), 1);
+  EXPECT_EQ(t_actual.args(0).type_id(), TFT_TENSOR);
+  EXPECT_EQ(t_actual.args(0).args_size(), 1);
+  EXPECT_EQ(t_actual.args(0).args(0).type_id(), TFT_INT32);
+  EXPECT_EQ(t_actual.args(0).args(0).args_size(), 0);
+}
+
+TEST(SpecializeType, ForEachExpandsFromListAttribute) {
+  OpDef op;
+  FullTypeDef* t = op.add_output_arg()->mutable_experimental_full_type();
+  t->set_type_id(TFT_FOR_EACH);
+  t->add_args()->set_type_id(TFT_PRODUCT);
+  t->add_args()->set_type_id(TFT_TENSOR);
+  t->mutable_args(1)->add_args()->set_type_id(TFT_VAR);
+  t->mutable_args(1)->mutable_args(0)->set_s("T");
+  t->add_args()->set_type_id(TFT_VAR);
+  t->mutable_args(2)->set_s("T");
+
+  AttrValue attr;
+  attr.mutable_list()->add_type(DT_INT32);
+  attr.mutable_list()->add_type(DT_FLOAT);
+  NodeDef ndef;
+  (*ndef.mutable_attr())["T"] = attr;
+
+  AttrSlice attrs(ndef);
+
+  FullTypeDef ft;
+  TF_ASSERT_OK(SpecializeType(attrs, op, ft));
+
+  EXPECT_EQ(ft.type_id(), TFT_PRODUCT);
+  EXPECT_EQ(ft.args_size(), 1);
+
+  const FullTypeDef& t_actual = ft.args(0);
+  EXPECT_EQ(t_actual.type_id(), TFT_PRODUCT);
+  EXPECT_EQ(t_actual.args_size(), 2);
+  EXPECT_EQ(t_actual.args(0).type_id(), TFT_TENSOR);
+  EXPECT_EQ(t_actual.args(0).args_size(), 1);
+  EXPECT_EQ(t_actual.args(0).args(0).type_id(), TFT_INT32);
+  EXPECT_EQ(t_actual.args(0).args(0).args_size(), 0);
+  EXPECT_EQ(t_actual.args(1).type_id(), TFT_TENSOR);
+  EXPECT_EQ(t_actual.args(1).args_size(), 1);
+  EXPECT_EQ(t_actual.args(1).args(0).type_id(), TFT_FLOAT);
+  EXPECT_EQ(t_actual.args(1).args(0).args_size(), 0);
+}
+
+TEST(SpecializeType, ForEachDistributesNestedVar) {
+  OpDef op;
+  FullTypeDef* t = op.add_output_arg()->mutable_experimental_full_type();
+  t->set_type_id(TFT_FOR_EACH);
+  t->add_args()->set_type_id(TFT_PRODUCT);
+  t->add_args()->set_type_id(TFT_TENSOR);
+  t->mutable_args(1)->add_args()->set_type_id(TFT_VAR);
+  t->mutable_args(1)->mutable_args(0)->set_s("ForEachTarget");
+  t->mutable_args(1)->add_args()->set_type_id(TFT_VAR);
+  t->mutable_args(1)->mutable_args(1)->set_s("GlobalVar");
+  t->add_args()->set_type_id(TFT_VAR);
+  t->mutable_args(2)->set_s("ForEachTarget");
+
+  NodeDef ndef;
+  AttrValue attr;
+
+  attr.mutable_list()->add_type(DT_INT32);
+  attr.mutable_list()->add_type(DT_INT64);
+  (*ndef.mutable_attr())["ForEachTarget"] = attr;
+
+  attr.set_type(DT_FLOAT);
+  (*ndef.mutable_attr())["GlobalVar"] = attr;
+
+  AttrSlice attrs(ndef);
+
+  FullTypeDef ft;
+  TF_ASSERT_OK(SpecializeType(attrs, op, ft));
+
+  EXPECT_EQ(ft.type_id(), TFT_PRODUCT);
+  EXPECT_EQ(ft.args_size(), 1);
+
+  const FullTypeDef& t_actual = ft.args(0);
+  EXPECT_EQ(t_actual.type_id(), TFT_PRODUCT);
+  EXPECT_EQ(t_actual.args_size(), 2);
+  EXPECT_EQ(t_actual.args(0).type_id(), TFT_TENSOR);
+  EXPECT_EQ(t_actual.args(0).args_size(), 2);
+  EXPECT_EQ(t_actual.args(0).args(0).type_id(), TFT_INT32);
+  EXPECT_EQ(t_actual.args(0).args(0).args_size(), 0);
+  EXPECT_EQ(t_actual.args(0).args(1).type_id(), TFT_FLOAT);
+  EXPECT_EQ(t_actual.args(0).args(1).args_size(), 0);
+  EXPECT_EQ(t_actual.args(1).type_id(), TFT_TENSOR);
+  EXPECT_EQ(t_actual.args(1).args_size(), 2);
+  EXPECT_EQ(t_actual.args(1).args(0).type_id(), TFT_INT64);
+  EXPECT_EQ(t_actual.args(1).args(0).args_size(), 0);
+  EXPECT_EQ(t_actual.args(1).args(1).type_id(), TFT_FLOAT);
+  EXPECT_EQ(t_actual.args(1).args(1).args_size(), 0);
+}
+
+TEST(SpecializeType, ForEachDistributesNestedForEach) {
+  OpDef op;
+  FullTypeDef* t = op.add_output_arg()->mutable_experimental_full_type();
+  t->set_type_id(TFT_FOR_EACH);
+  t->add_args()->set_type_id(TFT_PRODUCT);
+
+  FullTypeDef* inner = t->add_args();
+  inner->set_type_id(TFT_FOR_EACH);
+  inner->add_args()->set_type_id(TFT_PRODUCT);
+  inner->add_args()->set_type_id(TFT_ARRAY);
+  inner->mutable_args(1)->add_args()->set_type_id(TFT_VAR);
+  inner->mutable_args(1)->mutable_args(0)->set_s("InnerForEach");
+  inner->mutable_args(1)->add_args()->set_type_id(TFT_VAR);
+  inner->mutable_args(1)->mutable_args(1)->set_s("OuterForEach");
+  inner->add_args()->set_type_id(TFT_VAR);
+  inner->mutable_args(2)->set_s("InnerForEach");
+
+  t->add_args()->set_type_id(TFT_VAR);
+  t->mutable_args(2)->set_s("OuterForEach");
+
+  NodeDef ndef;
+  AttrValue attr;
+
+  attr.mutable_list()->add_type(DT_INT32);
+  attr.mutable_list()->add_type(DT_INT64);
+  (*ndef.mutable_attr())["OuterForEach"] = attr;
+
+  attr.set_type(DT_FLOAT);
+  (*ndef.mutable_attr())["InnerForEach"] = attr;
+
+  AttrSlice attrs(ndef);
+
+  FullTypeDef ft;
+  TF_ASSERT_OK(SpecializeType(attrs, op, ft));
+
+  EXPECT_EQ(ft.type_id(), TFT_PRODUCT);
+  EXPECT_EQ(ft.args_size(), 1);
+
+  const FullTypeDef& t_actual = ft.args(0);
+  EXPECT_EQ(t_actual.type_id(), TFT_PRODUCT);
+  EXPECT_EQ(t_actual.args_size(), 2);
+  EXPECT_EQ(t_actual.args(0).type_id(), TFT_PRODUCT);
+  EXPECT_EQ(t_actual.args(0).args_size(), 1);
+  EXPECT_EQ(t_actual.args(0).args(0).type_id(), TFT_ARRAY);
+  EXPECT_EQ(t_actual.args(0).args(0).args_size(), 2);
+  EXPECT_EQ(t_actual.args(0).args(0).args(0).type_id(), TFT_FLOAT);
+  EXPECT_EQ(t_actual.args(0).args(0).args(0).args_size(), 0);
+  EXPECT_EQ(t_actual.args(0).args(0).args(1).type_id(), TFT_INT32);
+  EXPECT_EQ(t_actual.args(0).args(0).args(1).args_size(), 0);
+  EXPECT_EQ(t_actual.args(1).type_id(), TFT_PRODUCT);
+  EXPECT_EQ(t_actual.args(1).args_size(), 1);
+  EXPECT_EQ(t_actual.args(1).args(0).type_id(), TFT_ARRAY);
+  EXPECT_EQ(t_actual.args(1).args(0).args_size(), 2);
+  EXPECT_EQ(t_actual.args(1).args(0).args(0).type_id(), TFT_FLOAT);
+  EXPECT_EQ(t_actual.args(1).args(0).args(0).args_size(), 0);
+  EXPECT_EQ(t_actual.args(1).args(0).args(1).type_id(), TFT_INT64);
+  EXPECT_EQ(t_actual.args(1).args(0).args(1).args_size(), 0);
+}
+
+TEST(SpecializeType, ForEachOverridesTargetOfNestedForEach) {
+  OpDef op;
+  FullTypeDef* t = op.add_output_arg()->mutable_experimental_full_type();
+  t->set_type_id(TFT_FOR_EACH);
+  t->add_args()->set_type_id(TFT_PRODUCT);
+
+  FullTypeDef* inner = t->add_args();
+  inner->set_type_id(TFT_FOR_EACH);
+  inner->add_args()->set_type_id(TFT_PRODUCT);
+  inner->add_args()->set_type_id(TFT_ARRAY);
+  inner->mutable_args(1)->add_args()->set_type_id(TFT_VAR);
+  inner->mutable_args(1)->mutable_args(0)->set_s("T");
+  inner->add_args()->set_type_id(TFT_VAR);
+  inner->mutable_args(2)->set_s("T");
+
+  t->add_args()->set_type_id(TFT_VAR);
+  t->mutable_args(2)->set_s("T");
+
+  NodeDef ndef;
+  AttrValue attr;
+
+  attr.mutable_list()->add_type(DT_FLOAT);
+  attr.mutable_list()->add_type(DT_DOUBLE);
+  (*ndef.mutable_attr())["T"] = attr;
+
+  AttrSlice attrs(ndef);
+
+  FullTypeDef ft;
+  TF_ASSERT_OK(SpecializeType(attrs, op, ft));
+
+  EXPECT_EQ(ft.type_id(), TFT_PRODUCT);
+  EXPECT_EQ(ft.args_size(), 1);
+
+  const FullTypeDef& t_actual = ft.args(0);
+  EXPECT_EQ(t_actual.type_id(), TFT_PRODUCT);
+  EXPECT_EQ(t_actual.args_size(), 2);
+  EXPECT_EQ(t_actual.args(0).type_id(), TFT_PRODUCT);
+  EXPECT_EQ(t_actual.args(0).args_size(), 1);
+  EXPECT_EQ(t_actual.args(0).args(0).type_id(), TFT_ARRAY);
+  EXPECT_EQ(t_actual.args(0).args(0).args_size(), 1);
+  EXPECT_EQ(t_actual.args(0).args(0).args(0).type_id(), TFT_FLOAT);
+  EXPECT_EQ(t_actual.args(0).args(0).args(0).args_size(), 0);
+  EXPECT_EQ(t_actual.args(1).type_id(), TFT_PRODUCT);
+  EXPECT_EQ(t_actual.args(1).args_size(), 1);
+  EXPECT_EQ(t_actual.args(1).args(0).type_id(), TFT_ARRAY);
+  EXPECT_EQ(t_actual.args(1).args(0).args_size(), 1);
+  EXPECT_EQ(t_actual.args(1).args(0).args(0).type_id(), TFT_DOUBLE);
+  EXPECT_EQ(t_actual.args(1).args(0).args(0).args_size(), 0);
+}
+
+TEST(SpecializeType, ForEachRejectsMalformedInput) {
+  OpDef op;
+  FullTypeDef* t = op.add_output_arg()->mutable_experimental_full_type();
+  t->set_type_id(TFT_FOR_EACH);
+  t->add_args()->set_type_id(TFT_PRODUCT);
+
+  NodeDef ndef;
+  AttrSlice attrs(ndef);
+
+  FullTypeDef ft;
+  EXPECT_FALSE(SpecializeType(attrs, op, ft).ok());
+}
+
+TEST(SpecializeType, RemovesLegacyVariant) {
+  OpDef op;
+  FullTypeDef* t = op.add_output_arg()->mutable_experimental_full_type();
+  t->set_type_id(TFT_ARRAY);
+  t->add_args()->set_type_id(TFT_TENSOR);
+  t->mutable_args(0)->add_args()->set_type_id(TFT_LEGACY_VARIANT);
+  t->add_args()->set_type_id(TFT_TENSOR);
+  t->mutable_args(1)->add_args()->set_type_id(TFT_FLOAT);
+
+  AttrSlice empty;
+
+  FullTypeDef ft;
+  TF_ASSERT_OK(SpecializeType(empty, op, ft));
+
+  EXPECT_EQ(ft.type_id(), TFT_PRODUCT);
+  EXPECT_EQ(ft.args_size(), 1);
+
+  const FullTypeDef& t_actual = ft.args(0);
+  EXPECT_EQ(t_actual.type_id(), TFT_ARRAY);
+  EXPECT_EQ(t_actual.args_size(), 0);
+}
+
+TEST(SpecializeType, RemovesLegacyVariantAfterExpansion) {
+  OpDef op;
+  FullTypeDef* t = op.add_output_arg()->mutable_experimental_full_type();
+  t->set_type_id(TFT_ARRAY);
+  t->add_args()->set_type_id(TFT_TENSOR);
+  t->mutable_args(0)->add_args()->set_type_id(TFT_VAR);
+  t->mutable_args(0)->mutable_args(0)->set_s("T");
+
+  AttrValue attr;
+  attr.set_type(DT_VARIANT);
+  NodeDef ndef;
+  (*ndef.mutable_attr())["T"] = attr;
+
+  AttrSlice attrs(ndef);
+
+  FullTypeDef ft;
+  TF_ASSERT_OK(SpecializeType(attrs, op, ft));
+
+  EXPECT_EQ(ft.type_id(), TFT_PRODUCT);
+  EXPECT_EQ(ft.args_size(), 1);
+
+  const FullTypeDef& t_actual = ft.args(0);
+  EXPECT_EQ(t_actual.type_id(), TFT_ARRAY);
+  EXPECT_EQ(t_actual.args_size(), 0);
 }
 
 TEST(GetArgDefaults, DefaultUnsetFromNoArgs) {

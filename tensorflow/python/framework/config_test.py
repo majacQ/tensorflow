@@ -158,33 +158,31 @@ class ConfigTest(test.TestCase, parameterized.TestCase):
     else:
       self.assertFalse(config.get_soft_device_placement())
 
-    def mod():
+    def test_attr():
       with ops.device('/device:GPU:0'):
-        a = constant_op.constant(1.0)
-        b = constant_op.constant(1.0)
-        return math_ops.mod(a, b)
+        return test_ops.test_attr(T=dtypes.float32, name='test_attr')
 
     config.set_soft_device_placement(True)
     self.assertEqual(config.get_soft_device_placement(), True)
     self.assertEqual(config.get_soft_device_placement(),
                      context.context().soft_device_placement)
 
-    # Since soft placement is enabled, the mod operation should fallback to CPU
-    # with pure eager execution as well as functions
-    mod()
-    def_function.function(mod)()
+    # Since soft placement is enabled, the test_attr operation should fallback
+    # to CPU with pure eager execution as well as functions
+    test_attr()
+    def_function.function(test_attr)()
 
     config.set_soft_device_placement(False)
     self.assertEqual(config.get_soft_device_placement(), False)
     self.assertEqual(config.get_soft_device_placement(),
                      context.context().soft_device_placement)
 
-    # Since soft placement is disabled, the mod operation should fail on GPU
-    # with pure eager execution as well as functions
+    # Since soft placement is disabled, the test_attr operation should fail on
+    # GPU with pure eager execution as well as functions
     with self.assertRaises(errors.InvalidArgumentError):
-      mod()
+      test_attr()
     with self.assertRaises(errors.InvalidArgumentError):
-      def_function.function(mod)()
+      def_function.function(test_attr)()
 
   @reset_eager
   def testLogDevicePlacement(self):
@@ -467,7 +465,9 @@ class DeviceTest(test.TestCase):
 
   @reset_eager
   def testGpuMultiple(self):
+    config.set_soft_device_placement(False)
     gpus = config.list_physical_devices('GPU')
+
     if len(gpus) < 2:
       self.skipTest('Need at least 2 GPUs')
 
@@ -478,7 +478,8 @@ class DeviceTest(test.TestCase):
         a = constant_op.constant(1.0)
         self.evaluate(a)
 
-    with self.assertRaisesRegex(RuntimeError, 'unknown device'):
+    with self.assertRaisesRegex(errors.InvalidArgumentError,
+                                'Could not satisfy device specification'):
       with ops.device('/device:GPU:' + str(len(gpus))):
         a = constant_op.constant(1.0)
         self.evaluate(a)

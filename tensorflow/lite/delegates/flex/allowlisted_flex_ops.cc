@@ -15,6 +15,7 @@ limitations under the License.
 #include "tensorflow/lite/delegates/flex/allowlisted_flex_ops.h"
 
 #include <set>
+#include <string>
 
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/lite/delegates/flex/allowlisted_flex_ops_internal.h"
@@ -96,15 +97,6 @@ const std::set<std::string>& GetFlexAllowlist() {
           "BitwiseAnd",
           "BitwiseOr",
           "BitwiseXor",
-          "BoostedTreesBucketize",
-          "BoostedTreesCreateQuantileStreamResource",
-          "BoostedTreesFlushQuantileSummaries",
-          "BoostedTreesMakeQuantileSummaries",
-          "BoostedTreesQuantileStreamResourceAddSummaries",
-          "BoostedTreesQuantileStreamResourceDeserialize",
-          "BoostedTreesQuantileStreamResourceFlush",
-          "BoostedTreesQuantileStreamResourceGetBucketBoundaries",
-          "BoostedTreesQuantileStreamResourceHandleOp",
           "BroadcastArgs",
           "BroadcastGradientArgs",
           "BroadcastTo",
@@ -262,7 +254,6 @@ const std::set<std::string>& GetFlexAllowlist() {
           "InvGrad",
           "Invert",
           "InvertPermutation",
-          "IsBoostedTreesQuantileStreamResourceInitialized",
           "IsFinite",
           "IsNan",
           "IsVariableInitialized",
@@ -432,6 +423,7 @@ const std::set<std::string>& GetFlexAllowlist() {
           "RandomUniformInt",
           "Range",
           "Rank",
+          "ReadFile",
           "ReadVariableOp",
           "Real",
           "RealDiv",
@@ -616,6 +608,7 @@ const std::set<std::string>& GetFlexAllowlist() {
           "StackV2",
           "StatelessMultinomial",
           "StatelessRandomGammaV2",
+          "StatelessRandomGammaV3",
           "StatelessRandomGetAlg",
           "StatelessRandomGetKeyCounter",
           "StatelessRandomGetKeyCounterAlg",
@@ -741,11 +734,13 @@ const std::set<std::string>& GetFlexAllowlist() {
           "UniqueWithCounts",
           "UniqueWithCountsV2",
           "Unpack",
+          "UnsortedSegmentJoin",
           "UnsortedSegmentMax",
           "UnsortedSegmentMin",
           "UnsortedSegmentProd",
           "UnsortedSegmentSum",
           "UnwrapDatasetVariant",
+          "UpperBound",
           "VarHandleOp",
           "VarIsInitializedOp",
           "Variable",
@@ -753,6 +748,7 @@ const std::set<std::string>& GetFlexAllowlist() {
           "VariableV2",
           "Where",
           "WrapDatasetVariant",
+          "WriteFile",
           "Xdivy",
           "Xlog1py",
           "Xlogy",
@@ -802,6 +798,7 @@ const std::set<std::string>& GetTFTextFlexAllowlist() {
           "SentencepieceDetokenizeOp",
           "SentencepieceVocabSizeOp",
           "SplitMergeTokenizeWithOffsets",
+          "TFText>NgramsStringJoin",
           "TFText>WhitespaceTokenizeWithOffsetsV2",
           "TokenizerFromLogits",
           "UnicodeScriptTokenizeWithOffsets",

@@ -14,6 +14,11 @@ limitations under the License.
 ==============================================================================*/
 #include "tensorflow/lite/delegates/flex/kernel.h"
 
+#include <functional>
+#include <initializer_list>
+#include <memory>
+#include <utility>
+
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "tensorflow/lite/delegates/flex/delegate.h"
@@ -48,7 +53,9 @@ class KernelTest : public testing::FlexModelTest {
   static constexpr int kTwos = 2;  // This is the index of a tensor of 2's.
   static constexpr int kMaxTensors = 30;
 
-  KernelTest() { interpreter_.reset(new Interpreter(&error_reporter_)); }
+  KernelTest() {
+    interpreter_ = std::make_unique<Interpreter>(&error_reporter_);
+  }
 
   void ApplyFlexDelegate(std::unique_ptr<FlexDelegate> delegate = nullptr) {
     auto flex_delegate = FlexDelegate::Create(std::move(delegate));
@@ -222,12 +229,9 @@ TEST_F(KernelTest, IncompatibleNodeDef) {
 
   ApplyFlexDelegate();
 
-  SetShape(0, {2, 2, 1});
-  SetValues(0, {1.1f, 2.2f, 3.3f, 4.4f});
-
-  ASSERT_FALSE(Invoke());
+  ASSERT_NE(interpreter_->AllocateTensors(), kTfLiteOk);
   ASSERT_THAT(error_reporter().error_messages(),
-              ContainsRegex("while executing 'Cast' via Eager"));
+              ContainsRegex("No attr named 'SrcT' in NodeDef"));
 }
 
 TEST_F(KernelTest, WrongSetOfNodes) {

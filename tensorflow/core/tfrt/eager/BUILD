@@ -9,6 +9,7 @@ load(
 )
 
 package(
+    # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
     default_visibility = [":friends"],
     licenses = ["notice"],
 )
@@ -101,10 +102,10 @@ cc_library(
         "//tensorflow/core/common_runtime/eager:attr_builder",
         "//tensorflow/core/common_runtime/eager:context",
         "//tensorflow/core/runtime_fallback/kernel:kernel_fallback_execute_compat",
-        "//tensorflow/core/runtime_fallback/kernel:op_kernel_runner",
         "//tensorflow/core/runtime_fallback/runtime:op_logger",
         "//tensorflow/core/runtime_fallback/runtime:runtime_fallback_alwayslink",
         "//tensorflow/core/runtime_fallback/conversion:conversion_alwayslink",
+        "//tensorflow/core/tfrt/fallback:op_kernel_runner",
         "//tensorflow/core/tfrt/utils",
         "@tf_runtime//:basic_kernels_alwayslink",
         "@tf_runtime//:bef",
@@ -137,8 +138,10 @@ cc_library(
     visibility = ["//visibility:public"],
     deps = [
         ":core_runtime",
-        "//tensorflow/core/tfrt/common:global_state",
+        "//tensorflow/core/common_runtime:process_util",
+        "//tensorflow/core/platform:threadpool_interface",
         "//tensorflow/core/runtime_fallback/runtime:kernel_utils",
+        "//tensorflow/core/tfrt/common:global_state",
         "//tensorflow/core/tpu:virtual_device",
         "//tensorflow/c/eager:immediate_execution_context",
         "//tensorflow/core:core_cpu",
@@ -146,6 +149,7 @@ cc_library(
         "//tensorflow/core:framework",
         "//tensorflow/core/runtime_fallback/runtime:runtime_fallback_alwayslink",
         "//tensorflow/core/runtime_fallback/conversion:conversion_alwayslink",
+        "//tensorflow/core/tfrt/runtime:tf_threadpool_concurrent_work_queue",
         "@tf_runtime//:basic_kernels_alwayslink",
         "@tf_runtime//:core_runtime_alwayslink",
         "@tf_runtime//:hostcontext_alwayslink",
@@ -191,6 +195,25 @@ cc_library(
     ],
 )
 
+# For a more maintainable build this target should not exist and the headers
+# should  be split into the existing cc_library targets, but this change was
+# automatically  done so that we can remove long standing issues and complexity
+# in the build system. It's up to the OWNERS of this package to get rid of it or
+# not. The use of the textual_hdrs attribute is discouraged, use hdrs instead.
+# Here it is used to avoid header parsing errors in packages where the feature
+# parse_headers was enabled since loose headers were not being parsed. See
+# go/loose-lsc-one-target-approach for more details.
+cc_library(
+    name = "loose_headers",
+    compatible_with = ["//buildenv/target:gce"],
+    tags = ["avoid_dep"],
+    textual_hdrs = [
+        "c_api_tfrt.h",
+        "c_api_tfrt_distributed_impl.h",
+    ],
+    visibility = ["//tensorflow/c/eager:__pkg__"],
+)
+
 alias(
     name = "core_runtime",
     actual = "//tensorflow/core/tfrt/eager/core_runtime:core_runtime_lib",
@@ -221,6 +244,7 @@ tf_cc_test(
         "//tensorflow/core:test_main",
         "//tensorflow/core/lib/llvm_rtti",
         "//tensorflow/core/platform:refcount",
+        "//tensorflow/core/runtime_fallback/kernel:kernel_fallback_execute_compat",
         "@com_google_absl//absl/types:span",
         "@tf_runtime//backends/cpu:tf_ops_alwayslink",
     ],

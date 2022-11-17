@@ -49,8 +49,8 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
         output = op(*placeholders)
       result = session.run(output, feeds)
       if not equality_fn:
-        equality_fn = self.assertAllClose
-      equality_fn(result, expected, rtol=1e-3)
+        equality_fn = lambda x, y: self.assertAllClose(x, y, rtol=1e-3)
+      equality_fn(result, expected)
 
   def testAdd(self):
     if xla_test.test.is_built_with_rocm():
@@ -319,7 +319,6 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
   @parameterized.parameters(stateless_random_ops.Algorithm.THREEFRY,
                             stateless_random_ops.Algorithm.PHILOX,
                             stateless_random_ops.Algorithm.AUTO_SELECT)
-  @test_util.disable_mlir_bridge('Not supported yet')
   def testRngBitGeneratorIsDeterministic(self, algorithm):
     dtype = np.uint32
     key = np.array([1, 2], dtype=np.uint64)
@@ -336,7 +335,6 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
         expected=(np.zeros(key.shape, dtype=key.dtype),
                   np.zeros(shape, dtype=dtype)))
 
-  @test_util.disable_mlir_bridge('Not supported yet')
   def testReduce(self):
     for dtype in set(self.numeric_types).intersection(
         set([dtypes.bfloat16.as_numpy_dtype, np.float32])):
@@ -441,7 +439,8 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
               np.exp(1) * 8 / 7 + 1e5 / 3
           ],
                             dtype=dtype))
-      error_term_equality = functools.partial(self.assertAllClose, atol=.005)
+      error_term_equality = functools.partial(
+          self.assertAllClose, rtol=1e-3, atol=.005)
       self._assertOpOutputMatchesExpected(
           kahan_sum_reduction(dims=[0], output_idx=1),
           args=(xs[shuffle_indices],),
@@ -574,7 +573,6 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
           args=(values_1, values_2),
           expected=(values_1, values_2))
 
-  @test_util.disable_mlir_bridge('Not supported yet')
   def testSelectAndScatter(self):
     for dtype in set(self.numeric_types).intersection(
         set([dtypes.bfloat16.as_numpy_dtype, np.float32])):
@@ -653,6 +651,35 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
           invalid_arg_error.exception.message,
           (r'op has mismatched number of slice sizes \(2\) and number of start'
            r' indices \(3\)'))
+
+  def test_optimization_barrier(self):
+    args = (np.array([[5, 6, 7]],
+                     dtype=np.float32), np.array([[1, 2, 3]], dtype=int))
+
+    self._assertOpOutputMatchesExpected(
+        xla.optimization_barrier, args=args, expected=args)
+
+  def test_reduce_precision(self):
+    arg = np.array([1 + 2**-2 + 2**-4, 128, 256], dtype=np.float32)
+    expected = np.array([1 + 2**-2, 128, float('Inf')], dtype=np.float32)
+    exponent_bits = 4
+    mantissa_bits = 2
+    self._assertOpOutputMatchesExpected(
+        lambda x: xla.reduce_precision(x, exponent_bits, mantissa_bits),
+        args=(arg,),
+        expected=expected,
+        equality_fn=self.assertAllEqual)
+
+    arg = np.array([4], dtype=np.float32)
+    expected = np.array([4], dtype=np.float32)
+    # Test passing numbers that cannot fit in a 32-bit integer.
+    exponent_bits = 2**33
+    mantissa_bits = 2**33
+    self._assertOpOutputMatchesExpected(
+        lambda x: xla.reduce_precision(x, exponent_bits, mantissa_bits),
+        args=(arg,),
+        expected=expected,
+        equality_fn=self.assertAllEqual)
 
 
 class XlaOpsShapeInferenceTest(xla_test.XLATestCase, parameterized.TestCase):

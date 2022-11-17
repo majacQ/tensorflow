@@ -292,27 +292,56 @@ class BinaryOpTest(test.TestCase):
     except ImportError as e:
       tf_logging.warn("Cannot test special functions: %s" % str(e))
 
+  def testBfloat16Basic(self):
+    bf16_np = dtypes_lib.bfloat16.as_numpy_dtype
+    x = np.linspace(-5, 20, 15).reshape(1, 3, 5).astype(bf16_np)  # pylint: disable=too-many-function-args
+    y = np.linspace(20, -5, 15).reshape(1, 3, 5).astype(bf16_np)  # pylint: disable=too-many-function-args
+    self._compareBoth(x, y, np.add, math_ops.add)
+    self._compareBoth(x, y, np.subtract, math_ops.subtract)
+    self._compareBoth(x, y, np.multiply, math_ops.multiply)
+    self._compareBoth(x, bf16_np(y + 0.1), np.true_divide, math_ops.truediv)
+    self._compareBoth(x, bf16_np(y + 0.1), np.floor_divide, math_ops.floordiv)
+    self._compareBoth(x, y, np.add, _ADD)
+    self._compareBoth(x, y, np.subtract, _SUB)
+    self._compareBoth(x, y, np.multiply, _MUL)
+    self._compareBoth(x, bf16_np(y + 0.1), np.true_divide, _TRUEDIV)
+    self._compareBoth(x, bf16_np(y + 0.1), np.floor_divide, _FLOORDIV)
+    self._compareBoth(x, y, np.maximum, math_ops.maximum)
+    self._compareBoth(x, y, np.minimum, math_ops.minimum)
+
   def testUint8Basic(self):
     x = np.arange(1, 13, 2).reshape(1, 3, 2).astype(np.uint8)
     y = np.arange(1, 7, 1).reshape(1, 3, 2).astype(np.uint8)
     self._compareBoth(x, y, np.add, math_ops.add)
+    self._compareBoth(x, y, np.subtract, math_ops.subtract)
+    self._compareBoth(x, y, np.subtract, _SUB)
 
   def testInt8Basic(self):
     x = np.arange(1, 13, 2).reshape(1, 3, 2).astype(np.int8)
     y = np.arange(1, 7, 1).reshape(1, 3, 2).astype(np.int8)
+    self._compareBoth(x, y, np.subtract, math_ops.subtract)
     self._compareBoth(x, y, np.multiply, math_ops.multiply)
+    self._compareBoth(x, y, np.true_divide, math_ops.truediv)
+    self._compareBoth(x, y, np.floor_divide, math_ops.floordiv)
+    self._compareBoth(x, y, np.subtract, _SUB)
     self._compareBoth(x, y, np.multiply, _MUL)
+    self._compareBoth(x, y, np.true_divide, _TRUEDIV)
+    self._compareBoth(x, y, np.floor_divide, _FLOORDIV)
 
   def testInt16Basic(self):
     x = np.arange(1, 13, 2).reshape(1, 3, 2).astype(np.int16)
     y = np.arange(1, 7, 1).reshape(1, 3, 2).astype(np.int16)
+    self._compareBoth(x, y, np.subtract, math_ops.subtract)
     self._compareBoth(x, y, np.multiply, math_ops.multiply)
+    self._compareBoth(x, y, np.subtract, _SUB)
     self._compareBoth(x, y, np.multiply, _MUL)
 
   def testUint16Basic(self):
     x = np.arange(1, 13, 2).reshape(1, 3, 2).astype(np.uint16)
     y = np.arange(1, 7, 1).reshape(1, 3, 2).astype(np.uint16)
+    self._compareBoth(x, y, np.subtract, math_ops.subtract)
     self._compareBoth(x, y, np.multiply, math_ops.multiply)
+    self._compareBoth(x, y, np.subtract, _SUB)
     self._compareBoth(x, y, np.multiply, _MUL)
     self._compareBoth(x, y, np.true_divide, math_ops.truediv)
     self._compareBoth(x, y, np.floor_divide, math_ops.floordiv)
@@ -342,6 +371,10 @@ class BinaryOpTest(test.TestCase):
     x = np.arange(1, 13, 2).reshape(1, 3, 2).astype(np.uint32)
     y = np.arange(1, 7, 1).reshape(1, 3, 2).astype(np.uint32)
     self._compareBoth(x, y, np.add, math_ops.add_v2)
+    self._compareBoth(x, y, np.true_divide, math_ops.truediv)
+    self._compareBoth(x, y, np.floor_divide, math_ops.floordiv)
+    self._compareBoth(x, y, np.true_divide, _TRUEDIV)
+    self._compareBoth(x, y, np.floor_divide, _FLOORDIV)
 
   def testInt64Basic(self):
     x = np.arange(1 << 40, 13 << 40, 2 << 40).reshape(1, 3, 2).astype(np.int64)
@@ -356,6 +389,14 @@ class BinaryOpTest(test.TestCase):
     self._compareBoth(x, y, np.true_divide, _TRUEDIV)
     self._compareBoth(x, y, np.floor_divide, _FLOORDIV)
     self._compareBoth(x, y, np.mod, _MOD)
+
+  def testUint64Basic(self):
+    x = np.arange(1, 13, 2).reshape(1, 3, 2).astype(np.uint32)
+    y = np.arange(1, 7, 1).reshape(1, 3, 2).astype(np.uint32)
+    self._compareBoth(x, y, np.true_divide, math_ops.truediv)
+    self._compareBoth(x, y, np.floor_divide, math_ops.floordiv)
+    self._compareBoth(x, y, np.true_divide, _TRUEDIV)
+    self._compareBoth(x, y, np.floor_divide, _FLOORDIV)
 
   @test_util.run_deprecated_v1
   def testComplex64Basic(self):
@@ -778,11 +819,14 @@ class BinaryOpTest(test.TestCase):
 
   def testAtan2SpecialValues(self):
     x1l, x2l = zip((+0.0, +0.0), (+0.0, -0.0), (-0.0, +0.0), (-0.0, -0.0),
+                   (1.0, 0.0), (-1.0, 0.0), (1.0, -0.0), (-1.0, -0.0),
+                   (0.0, 1.0), (0.0, -1.0), (-0.0, 1.0), (-0.0, -1.0),
                    (1.2345, float("inf")), (1.2345, -float("inf")),
                    (-4.321, float("inf")), (-4.125, -float("inf")),
                    (float("inf"), float("inf")), (float("inf"), -float("inf")),
                    (-float("inf"), float("inf")),
-                   (-float("inf"), -float("inf")))
+                   (-float("inf"), -float("inf")), (float("1"), float("nan")),
+                   (float("nan"), float("1")), (float("nan"), float("nan")))
     for dtype in np.float32, np.float64:
       x1 = np.array(x1l).astype(dtype)
       x2 = np.array(x2l).astype(dtype)
@@ -1003,6 +1047,7 @@ class ComparisonOpTest(test.TestCase):
         dtypes_lib.qint16,
         dtypes_lib.quint8,
         dtypes_lib.quint16,
+        dtypes_lib.qint32,
     ]
     x = np.asarray([0, 1, 2, 3, 4])
     y = np.asarray([0, 1, 2, 3, 4])

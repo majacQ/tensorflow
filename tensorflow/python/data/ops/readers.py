@@ -15,9 +15,9 @@
 """Python wrappers for reader Datasets."""
 import os
 
-from tensorflow.core.framework import dataset_metadata_pb2
 from tensorflow.python import tf2
 from tensorflow.python.data.ops import dataset_ops
+from tensorflow.python.data.ops import from_tensor_slices_op
 from tensorflow.python.data.ops import structured_function
 from tensorflow.python.data.util import convert
 from tensorflow.python.framework import dtypes
@@ -70,7 +70,7 @@ def _create_or_validate_filenames_dataset(filenames, name=None):
           "The `filenames` argument must contain `tf.string` elements. Got "
           f"`{filenames.dtype!r}` elements.")
     filenames = array_ops.reshape(filenames, [-1], name="flat_filenames")
-    filenames = dataset_ops.TensorSliceDataset(
+    filenames = from_tensor_slices_op.TensorSliceDataset(
         filenames, is_files=True, name=name)
   return filenames
 
@@ -151,9 +151,7 @@ class _TextLineDataset(dataset_ops.DatasetSource):
         "buffer_size",
         buffer_size,
         argument_default=_DEFAULT_READER_BUFFER_SIZE_BYTES)
-    self._metadata = dataset_metadata_pb2.Metadata()
-    if name:
-      self._metadata.name = dataset_ops._validate_and_encode(name)
+    self._name = name
 
     variant_tensor = gen_dataset_ops.text_line_dataset(
         self._filenames,
@@ -305,9 +303,7 @@ class _TFRecordDataset(dataset_ops.DatasetSource):
         "buffer_size",
         buffer_size,
         argument_default=_DEFAULT_READER_BUFFER_SIZE_BYTES)
-    self._metadata = dataset_metadata_pb2.Metadata()
-    if name:
-      self._metadata.name = dataset_ops._validate_and_encode(name)
+    self._name = name
 
     variant_tensor = gen_dataset_ops.tf_record_dataset(
         self._filenames, self._compression_type, self._buffer_size,
@@ -358,9 +354,7 @@ class ParallelInterleaveDataset(dataset_ops.UnaryDataset):
       self._deterministic = "false"
     else:
       self._deterministic = "true"
-    self._metadata = dataset_metadata_pb2.Metadata()
-    if name:
-      self._metadata.name = dataset_ops._validate_and_encode(name)
+    self._name = name
 
     variant_tensor = ged_ops.legacy_parallel_interleave_dataset_v2(
         self._input_dataset._variant_tensor,  # pylint: disable=protected-access
@@ -552,9 +546,7 @@ class _FixedLengthRecordDataset(dataset_ops.DatasetSource):
         compression_type,
         argument_default="",
         argument_dtype=dtypes.string)
-    self._metadata = dataset_metadata_pb2.Metadata()
-    if name:
-      self._metadata.name = dataset_ops._validate_and_encode(name)
+    self._name = name
 
     variant_tensor = gen_dataset_ops.fixed_length_record_dataset_v2(
         self._filenames,

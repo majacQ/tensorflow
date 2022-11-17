@@ -16,9 +16,11 @@ def generated_test_models():
         "add",
         "add_n",
         "arg_min_max",
+        "atan2",
         "avg_pool",
         "avg_pool3d",
         "batch_to_space_nd",
+        "batchmatmul",
         "broadcast_args",
         "broadcast_gradient_args",
         "broadcast_to",
@@ -46,6 +48,7 @@ def generated_test_models():
         "depthwiseconv",
         "div",
         "dynamic_rnn",
+        "dynamic_update_slice",
         "einsum",
         "elu",
         "embedding_lookup",
@@ -63,6 +66,7 @@ def generated_test_models():
         "gather",
         "gather_nd",
         "gather_with_constant",
+        "gelu",
         "global_batch_norm",
         "greater",
         "greater_equal",
@@ -86,6 +90,7 @@ def generated_test_models():
         "logical_or",
         "logical_xor",
         "lstm",
+        "matrix_band_part",
         "matrix_diag",
         "matrix_set_diag",
         "max_pool",
@@ -139,6 +144,8 @@ def generated_test_models():
         "shape",
         "shape_to_strided_slice",
         "sigmoid",
+        "sigmoid_grad",
+        "sign",
         "sin",
         "slice",
         "softmax",
@@ -177,6 +184,10 @@ def generated_test_models():
         "unique",
         "unpack",
         "unroll_batch_matmul",
+        "unsorted_segment_max",
+        "unsorted_segment_min",
+        "unsorted_segment_prod",
+        "unsorted_segment_sum",
         "where",
         "where_v2",
         "while",
@@ -190,12 +201,6 @@ def mlir_generated_test_denylisted_models():
         # changing on 3/3, this will only be disabled temporarily.
         "unidirectional_sequence_lstm",
         "unidirectional_sequence_rnn",
-    ]
-
-# Test cases which only work internally now.
-def no_oss_generated_test_models():
-    return [
-        "sparse_to_dense",
     ]
 
 # List of models that fail generated tests for the conversion mode.
@@ -215,6 +220,7 @@ def generated_test_models_failing(conversion_mode, delegate):
             "conv3d_transpose",
             "depthwiseconv",
             "dynamic_rnn",
+            "einsum",
             "expand_dims",
             "eye",
             "fill",
@@ -224,6 +230,7 @@ def generated_test_models_failing(conversion_mode, delegate):
             "gather_nd",
             "global_batch_norm",
             "leaky_relu",
+            "matrix_band_part",
             "mean",
             "mirror_pad",
             "multinomial",
@@ -263,6 +270,10 @@ def generated_test_models_failing(conversion_mode, delegate):
             "topk",
             "transpose",
             "unique",
+            "unsorted_segment_max",
+            "unsorted_segment_min",
+            "unsorted_segment_prod",
+            "unsorted_segment_sum",
             "where",
             "where_v2",
             "while",
@@ -332,6 +343,10 @@ def merged_test_models():
                 # Merged test rules are only for running on the real device environment.
                 if "notap" not in tags:
                     tags.append("notap")
+
+                # Only execute merged tests on real device.
+                if "no_oss" not in tags:
+                    tags.append("no_oss")
                 args = common_test_args_for_generated_models(conversion_mode, False)
                 n = number_of_merged_zip_file(conversion_mode, delegate)
                 for i in range(n):
@@ -431,7 +446,6 @@ def generated_test_models_all():
             (conversion mode, delegate to use, name of test, test tags, test args).
     """
     conversion_modes = generated_test_conversion_modes()
-    no_oss_tests = no_oss_generated_test_models()
     options = []
     for conversion_mode in conversion_modes:
         for delegate in generated_test_delegates():
@@ -439,10 +453,6 @@ def generated_test_models_all():
             for test in mlir_generated_test_models():
                 tags = []
                 args = []
-
-                # TODO(b/187992093): Exclude tests that are failing in OSS for now.
-                if test in no_oss_tests:
-                    tags.append("no_oss")
 
                 # Forward-compat coverage testing is largely redundant, and
                 # contributes to coverage test bloat.
@@ -561,12 +571,12 @@ def gen_zipped_test_file(name, file, flags = ""):
     """
     native.genrule(
         name = file + ".files",
-        cmd = (("$(locations :generate_examples) " +
+        cmd = (("$(location //tensorflow/lite/testing:generate_examples) " +
                 " --zip_to_output {0} {1} $(@D)").format(file, flags)),
         outs = [file],
         # `exec_tools` is required for PY3 compatibility in place of `tools`.
         exec_tools = [
-            ":generate_examples",
+            "//tensorflow/lite/testing:generate_examples",
         ],
     )
 

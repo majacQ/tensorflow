@@ -18,7 +18,7 @@ limitations under the License.
 
 #include "absl/strings/string_view.h"
 #include "mlir/IR/Operation.h"  // from @llvm-project
-#include "tensorflow/compiler/xla/service/hlo_module.h"
+#include "tensorflow/compiler/xla/hlo/ir/hlo_module.h"
 #include "tensorflow/compiler/xla/status.h"
 #include "tensorflow/compiler/xla/xla.pb.h"
 
@@ -30,17 +30,21 @@ limitations under the License.
 
 namespace xla {
 
+// Argument used when calling DumpHloModuleIfEnabled before optimizations are
+// performed on an HloModule.
+constexpr char kBeforeOptimizationsDumpName[] = "before_optimizations";
+constexpr char kAfterOptimizationsDumpName[] = "after_optimizations";
+
 class BufferAssignment;
-class HloExecutionProfile;
 class HloSnapshot;
 
 // Get a timestamp which we can use as a filename prefix specific to this
 // module.
-string TimestampFor(const HloModule& module);
+std::string TimestampFor(const HloModule& module);
 
 // Create the filename we will use to dump in DumpToFileInDir.
-string FilenameFor(const HloModule& module, absl::string_view prefix,
-                   absl::string_view suffix);
+std::string FilenameFor(const HloModule& module, absl::string_view prefix,
+                        absl::string_view suffix);
 
 // Writes the given string to a file in the xla_dump_to directory specified by
 // module's DebugOptions.
@@ -75,23 +79,25 @@ void DumpToFileInDirOrStdout(const HloModule& module,
                              absl::string_view file_prefix,
                              mlir::Operation* op);
 
-// Dumps the given execution options if dumping is enabled. Exactly
-// where and in what formats it's dumped is determined by the debug options.
-void DumpExecutionOptions(const ExecutionOptions& execution_options,
-                          const DebugOptions& debug_options);
+// Dumps the given protobuf to the given filename if dumping is enabled.
+// Exactly where and in what formats it's dumped is determined by the debug
+// options.
+void DumpProtobufToFile(const tsl::protobuf::Message& proto,
+                        const DebugOptions& debug_options,
+                        absl::string_view filename);
+
+// Similar to above, but the filename depends on module's information and the
+// given name.
+void DumpPerModuleProtobufToFile(const HloModule& module,
+                                 const tsl::protobuf::Message& proto,
+                                 const DebugOptions& debug_options,
+                                 absl::string_view name);
 
 // Dumps the given HLO module if dumping is enabled for the module. Exactly
 // where and in what formats it's dumped is determined by the module's config.
-//
-// If you pass an HloExecutionProfile, note that currently only DOT-based output
-// formats (i.e. --xla_dump_as_{dot,html,url}) are able to incorporate it into
-// their output.  Other formats will just ignore the profile.
 void DumpHloModuleIfEnabled(const HloModule& module, absl::string_view name);
 void DumpHloModuleIfEnabled(const HloModule& module,
                             const BufferAssignment& buffer_assn,
-                            absl::string_view name);
-void DumpHloModuleIfEnabled(const HloModule& module,
-                            const HloExecutionProfile& profile,
                             absl::string_view name);
 
 // Dumps the given HLO module after running one HLO pass and before running

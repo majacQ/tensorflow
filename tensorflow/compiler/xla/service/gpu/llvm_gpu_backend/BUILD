@@ -5,6 +5,7 @@ load(
 )
 
 package(
+    # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
     default_visibility = [":friends"],
     licenses = ["notice"],
 )
@@ -33,6 +34,8 @@ cc_library(
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
+        "//tensorflow/tsl/platform:env",
+        "//tensorflow/tsl/platform:logging",
         "@llvm-project//llvm:Analysis",
         "@llvm-project//llvm:BitReader",
         "@llvm-project//llvm:BitWriter",
@@ -47,6 +50,7 @@ cc_library(
         "@llvm-project//llvm:Scalar",
         "@llvm-project//llvm:Support",
         "@llvm-project//llvm:Target",
+        "//tensorflow/compiler/xla/service/gpu:metrics",
         "//tensorflow/compiler/xla:status_macros",
         "//tensorflow/compiler/xla:statusor",
         "//tensorflow/compiler/xla:types",
@@ -55,9 +59,10 @@ cc_library(
         "//tensorflow/compiler/xla/service/gpu:gpu_types",
         "//tensorflow/compiler/xla/service/llvm_ir:llvm_command_line_options",
         "//tensorflow/compiler/xla/service/llvm_ir:llvm_type_conversion_util",
-        "//tensorflow/core:lib",
-        "//tensorflow/core:lib_internal",
-        "//tensorflow/core/profiler/lib:traceme",
+        "//tensorflow/tsl/platform:random",
+        "//tensorflow/tsl/profiler/lib:traceme",
+        "//tensorflow/tsl/platform:path",
+        "//tensorflow/tsl/util:env_var",
     ] + if_rocm_is_configured([
         "@local_config_rocm//rocm:rocm_headers",
         "@llvm-project//llvm:AMDGPUCodeGen",
@@ -75,9 +80,10 @@ tf_cc_test(
         ":llvm_gpu_backend",
         "//tensorflow/compiler/xla:types",
         "//tensorflow/compiler/xla/tests:xla_internal_test_main",
-        "//tensorflow/core:lib",
-        "//tensorflow/core:test",
-        "//tensorflow/core/platform:resource_loader",
+        "//tensorflow/tsl/platform:logging",
+        "//tensorflow/tsl/platform:path",
+        "//tensorflow/tsl/platform:resource_loader",
+        "//tensorflow/tsl/platform:test",
         "@llvm-project//llvm:Core",
         "@llvm-project//llvm:Support",
     ],

@@ -18,10 +18,10 @@ limitations under the License.
 #include <memory>
 #include <string>
 
-#include "tensorflow/compiler/xla/service/hlo_computation.h"
-#include "tensorflow/compiler/xla/service/hlo_instruction.h"
+#include "tensorflow/compiler/xla/hlo/ir/hlo_computation.h"
+#include "tensorflow/compiler/xla/hlo/ir/hlo_instruction.h"
+#include "tensorflow/compiler/xla/hlo/ir/hlo_opcode.h"
 #include "tensorflow/compiler/xla/service/hlo_matchers.h"
-#include "tensorflow/compiler/xla/service/hlo_opcode.h"
 #include "tensorflow/compiler/xla/test.h"
 #include "tensorflow/compiler/xla/tests/hlo_test_base.h"
 #include "tensorflow/compiler/xla/types.h"
@@ -34,7 +34,7 @@ namespace op = testing::opcode_matchers;
 
 TEST_F(ConvolutionGroupConverterTest,
        ConvertFeatureGroupCountEqualToInputFeatureDim) {
-  string hlo_string = R"(HloModule Convolve1D1Window_0_module
+  std::string hlo_string = R"(HloModule Convolve1D1Window_0_module
 
 ENTRY %Convolve1D1Window_0.v3 (input: f32[1,2,2], filter: f32[1,1,2]) -> f32[1,2,2] {
   %input = f32[1,2,2]{2,1,0} parameter(0)
@@ -52,7 +52,7 @@ ENTRY %Convolve1D1Window_0.v3 (input: f32[1,2,2], filter: f32[1,1,2]) -> f32[1,2
   auto cost_model = [](HloInstruction* conv) { return true; };
   ConvolutionGroupConverter converter(should_expand, cost_model,
                                       /*convert_batch_groups_only=*/false);
-  ASSERT_TRUE(converter.Run(module.get()).ValueOrDie());
+  ASSERT_TRUE(converter.Run(module.get()).value());
   root = computation->root_instruction();
   // Make sure the convolution is converted to one with feature_group_count = 1.
   EXPECT_EQ(root->opcode(), HloOpcode::kConvolution);
@@ -67,7 +67,7 @@ ENTRY %Convolve1D1Window_0.v3 (input: f32[1,2,2], filter: f32[1,1,2]) -> f32[1,2
 
 TEST_F(ConvolutionGroupConverterTest,
        ConvertFeatureGroupCountDivisorOfInputFeatureDim) {
-  string hlo_string = R"(HloModule Convolve1D1Window_0_module
+  std::string hlo_string = R"(HloModule Convolve1D1Window_0_module
 
 ENTRY %Convolve1D1Window_0.v3 (input: f32[1,2,4], filter: f32[1,2,2]) -> f32[1,2,2] {
   %input = f32[1,2,4]{2,1,0} parameter(0)
@@ -86,7 +86,7 @@ ENTRY %Convolve1D1Window_0.v3 (input: f32[1,2,4], filter: f32[1,2,2]) -> f32[1,2
   ConvolutionGroupConverter converter(should_expand,
                                       cost_model, /*convert_batch_groups_only=*/
                                       false);
-  ASSERT_TRUE(converter.Run(module.get()).ValueOrDie());
+  ASSERT_TRUE(converter.Run(module.get()).value());
   root = computation->root_instruction();
   // Make sure the convolution is replaced with a reshape.
   EXPECT_EQ(root->opcode(), HloOpcode::kReshape);
@@ -97,7 +97,7 @@ ENTRY %Convolve1D1Window_0.v3 (input: f32[1,2,4], filter: f32[1,2,2]) -> f32[1,2
 
 TEST_F(ConvolutionGroupConverterTest,
        ConvertBatchGroupCountEqualToInputBatchDim) {
-  string hlo_string = R"(HloModule Convolve1D1Window_0_module
+  std::string hlo_string = R"(HloModule Convolve1D1Window_0_module
 
 ENTRY %Convolve1D1Window_0.v3 (input: f32[16,19,19,512]{3,2,1,0}, filter: f32[16,19,19,512]{3,2,1,0}) -> f32[3,3,512,1]{3,2,1,0} {
   %input = f32[16,19,19,512]{3,2,1,0} parameter(0)
@@ -115,7 +115,7 @@ ENTRY %Convolve1D1Window_0.v3 (input: f32[16,19,19,512]{3,2,1,0}, filter: f32[16
   ConvolutionGroupConverter converter(should_expand,
                                       cost_model, /*convert_batch_groups_only=*/
                                       true);
-  ASSERT_TRUE(converter.Run(module.get()).ValueOrDie());
+  ASSERT_TRUE(converter.Run(module.get()).value());
   root = computation->root_instruction();
 
   // Verify that the convolution is replaced by a convert.
@@ -126,7 +126,7 @@ ENTRY %Convolve1D1Window_0.v3 (input: f32[16,19,19,512]{3,2,1,0}, filter: f32[16
 
 TEST_F(ConvolutionGroupConverterTest,
        ConvertBatchGroupCountNotEqualToInputBatchDim) {
-  string hlo_string = R"(HloModule m
+  std::string hlo_string = R"(HloModule m
   ENTRY main {
   %input = f32[1,1,1,4] parameter(0)
   %filter = f32[1,1,1,2] parameter(1)
@@ -146,7 +146,7 @@ TEST_F(ConvolutionGroupConverterTest,
                                       true);
   // Make sure that batch group count is rewritten even if
   // batch_group_count == output_feature but not input_batch
-  ASSERT_TRUE(converter.Run(module.get()).ValueOrDie());
+  ASSERT_TRUE(converter.Run(module.get()).value());
 }
 
 }  // namespace

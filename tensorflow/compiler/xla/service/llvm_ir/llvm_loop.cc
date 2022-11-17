@@ -26,7 +26,7 @@ limitations under the License.
 #include "tensorflow/compiler/xla/service/llvm_ir/llvm_util.h"
 #include "tensorflow/compiler/xla/shape_util.h"
 #include "tensorflow/compiler/xla/types.h"
-#include "tensorflow/core/platform/logging.h"
+#include "tensorflow/tsl/platform/logging.h"
 
 namespace xla {
 namespace llvm_ir {
@@ -166,7 +166,7 @@ std::vector<llvm::Metadata*> ForLoop::GetLoopMetadata(llvm::IRBuilder<>* b) {
   return result;
 }
 
-string ForLoop::GetQualifiedName(absl::string_view name) {
+std::string ForLoop::GetQualifiedName(absl::string_view name) {
   return llvm_ir::IrName(prefix_, llvm_ir::IrName(name, suffix_));
 }
 

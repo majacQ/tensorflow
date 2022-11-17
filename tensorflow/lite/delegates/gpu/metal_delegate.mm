@@ -109,13 +109,12 @@ class GpuAlarmClock {
       command_queue_ = command_queue;
       device_ = [command_queue_ device];
       total_alarms_ = 1;
-      NSString* error;
       id<MTLComputePipelineState> program;
       // TODO(impjdi): Properly handle returned status.
       CreateComputeProgram(device_,
-                           @"kernel void ComputeFunction(device int* output_buffer [[buffer(0)]]) "
-                           @"{ output_buffer[0] = 0; }",
-                           @"ComputeFunction", nullptr, &program)
+                           "kernel void ComputeFunction(device int* output_buffer [[buffer(0)]]) { "
+                           "output_buffer[0] = 0; }",
+                           "ComputeFunction", {}, &program)
           .IgnoreError();
       stub_program_ = program;
       stub_buffer_ = [device_ newBufferWithLength:sizeof(int) * 4
@@ -183,16 +182,15 @@ class Delegate {
     command_queue_ = [metal_device_ newCommandQueue];
     if (options_.wait_type == TFLGpuDelegateWaitType::TFLGpuDelegateWaitTypeAggressive) {
       gpu_alarm_clock_ = std::unique_ptr<GpuAlarmClock>(new GpuAlarmClock(command_queue_));
-      NSString* code = @R"(
+      const std::string code = R"(
           kernel void ComputeFunction(device int* output_buffer [[buffer(0)]],
                                       constant int& value [[buffer(1)]]) {
             output_buffer[0] = value;
           }
         )";
-      NSString* error;
       id<MTLComputePipelineState> signal_program;
       // TODO(impjdi): Properly handle returned status.
-      CreateComputeProgram(metal_device_, code, @"ComputeFunction", nullptr, &signal_program)
+      CreateComputeProgram(metal_device_, code, "ComputeFunction", {}, &signal_program)
           .IgnoreError();
       signal_program_ = signal_program;
       signal_buffer_ = [metal_device_ newBufferWithLength:sizeof(int) * 4
@@ -356,7 +354,7 @@ class Delegate {
       precision = CalculationsPrecision::F32;
     }
 
-    InferenceContext::CreateInferenceInfo create_info;
+    CreateGpuModelInfo create_info;
     create_info.precision = precision;
     create_info.storage_type = GetFastestStorageType(gpu_info);
     create_info.hints.Add(ModelHints::kAllowSpecialKernels);
@@ -404,10 +402,11 @@ class Delegate {
       id<MTLBuffer> bphwc4_buffer =
           [metal_device_ newBufferWithLength:bphwc4_length options:MTLResourceStorageModeShared];
       MetalSpatialTensor metal_tensor;
-      RETURN_IF_ERROR(CreateSharedBufferTensor(bphwc4_buffer, input_tensor.shape,
-                                               create_info.external_mutable_tensors[input],
-                                               &metal_tensor));
-      in_out_tensors_[input] = absl::make_unique<MetalSpatialTensor>(std::move(metal_tensor));
+      TensorDescriptor descriptor_with_shape = create_info.external_mutable_tensors[input];
+      descriptor_with_shape.SetBHWCShape(input_tensor.shape);
+      RETURN_IF_ERROR(
+          CreateTensorSharedBuffer(bphwc4_buffer, descriptor_with_shape, &metal_tensor));
+      in_out_tensors_[input] = std::make_unique<MetalSpatialTensor>(std::move(metal_tensor));
     }
 
     std::vector<::tflite::gpu::ValueId> output_ids;
@@ -435,10 +434,11 @@ class Delegate {
       id<MTLBuffer> bphwc4_buffer =
           [metal_device_ newBufferWithLength:bphwc4_length options:MTLResourceStorageModeShared];
       MetalSpatialTensor metal_tensor;
-      RETURN_IF_ERROR(CreateSharedBufferTensor(bphwc4_buffer, output_tensor.shape,
-                                               create_info.external_mutable_tensors[output],
-                                               &metal_tensor));
-      in_out_tensors_[output] = absl::make_unique<MetalSpatialTensor>(std::move(metal_tensor));
+      TensorDescriptor descriptor_with_shape = create_info.external_mutable_tensors[output];
+      descriptor_with_shape.SetBHWCShape(output_tensor.shape);
+      RETURN_IF_ERROR(
+          CreateTensorSharedBuffer(bphwc4_buffer, descriptor_with_shape, &metal_tensor));
+      in_out_tensors_[output] = std::make_unique<MetalSpatialTensor>(std::move(metal_tensor));
     }
 
     // allocate converter bhwc->bphwc4

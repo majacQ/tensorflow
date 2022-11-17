@@ -16,10 +16,11 @@ limitations under the License.
 #ifndef TENSORFLOW_LITE_TOOLS_DELEGATES_DELEGATE_PROVIDER_H_
 #define TENSORFLOW_LITE_TOOLS_DELEGATES_DELEGATE_PROVIDER_H_
 
+#include <memory>
 #include <string>
 #include <vector>
 
-#include "tensorflow/lite/c/common.h"
+#include "tensorflow/lite/core/shims/c/common.h"
 #include "tensorflow/lite/tools/command_line_flags.h"
 #include "tensorflow/lite/tools/logging.h"
 #include "tensorflow/lite/tools/tool_params.h"
@@ -30,7 +31,7 @@ namespace tools {
 // Same w/ Interpreter::TfLiteDelegatePtr to avoid pulling
 // tensorflow/lite/interpreter.h dependency
 using TfLiteDelegatePtr =
-    std::unique_ptr<TfLiteDelegate, void (*)(TfLiteDelegate*)>;
+    std::unique_ptr<TfLiteOpaqueDelegate, void (*)(TfLiteOpaqueDelegate*)>;
 
 class DelegateProvider {
  public:
@@ -109,6 +110,10 @@ class DelegateProviderRegistrar {
   static tflite::tools::DelegateProviderRegistrar::Register<T> \
       REGISTER_DELEGATE_PROVIDER_VNAME(T);
 
+// Creates a null delegate, useful for cases where no reasonable delegate can be
+// created.
+TfLiteDelegatePtr CreateNullDelegate();
+
 // A global helper function to get all registered delegate providers.
 inline const DelegateProviderList& GetRegisteredDelegateProviders() {
   return DelegateProviderRegistrar::GetProviders();
@@ -120,9 +125,7 @@ class ProvidedDelegateList {
  public:
   struct ProvidedDelegate {
     ProvidedDelegate()
-        : provider(nullptr),
-          delegate(nullptr, [](TfLiteDelegate*) {}),
-          rank(0) {}
+        : provider(nullptr), delegate(CreateNullDelegate()), rank(0) {}
     const DelegateProvider* provider;
     TfLiteDelegatePtr delegate;
     int rank;

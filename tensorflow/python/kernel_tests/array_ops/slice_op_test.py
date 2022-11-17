@@ -248,6 +248,7 @@ class SliceTest(test.TestCase):
           np.float64,
           np.complex64,
           np.complex128,
+          dtypes.bfloat16.as_numpy_dtype,
       ]:
         inp = np.random.rand(4, 4).astype(dtype)
         a = constant_op.constant(
@@ -338,7 +339,7 @@ class SliceTest(test.TestCase):
     slices = []
     for i in range(len(input_shape)):
       slices.append(slice(slice_begin[i], slice_begin[i] + slice_size[i]))
-    np_ans[slices] = grads
+    np_ans[tuple(slices)] = grads
 
     self.assertAllClose(np_ans, result)
 
@@ -363,7 +364,7 @@ class SliceTest(test.TestCase):
     slices = []
     for i in range(len(input_shape)):
       slices.append(slice(slice_begin[i], slice_begin[i] + slice_size[i]))
-    np_ans[slices] = grads
+    np_ans[tuple(slices)] = grads
 
     self.assertAllClose(np_ans, result)
 
@@ -460,7 +461,7 @@ class SliceTest(test.TestCase):
       # unintended behavior is prevented.
       c = constant_op.constant(5.0)
       with self.assertRaisesRegex(errors_impl.OperatorNotAllowedInGraphError,
-                                  "iterating over `tf.Tensor`"):
+                                  "Iterating over a symbolic `tf.Tensor`"):
         for _ in c:
           pass
 

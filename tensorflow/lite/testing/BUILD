@@ -11,18 +11,18 @@ load(
     "gen_zip_test",
     "gen_zipped_test_file",
     "generated_test_models_all",
-    "merged_test_models",
 )
 load("//tensorflow/lite/testing:tflite_model_test.bzl", "tflite_model_test")
-load("//tensorflow:tensorflow.bzl", "pybind_extension")
+load("//tensorflow:tensorflow.default.bzl", "pybind_extension")
 load(
     "//tensorflow:tensorflow.bzl",
     "tf_cc_binary",
     "tf_cc_test",
-    "tf_features_nolayering_check_if_android_or_ios",
+    "tf_features_nolayering_check_if_ios",
 )
 
 package(
+    # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
     default_visibility = [
         "//visibility:public",
     ],
@@ -30,18 +30,26 @@ package(
 )
 
 exports_files([
+    "build_def.bzl",
     "generated_examples_zip_test.cc",
     "tflite_diff_example_test.cc",
     "init_tensorflow.h",
     "init_tensorflow.cc",
 ])
 
+_test_size_override = {
+    # copybara:comment_begin(oss-only)
+    "merged_models_with-flex_6": "large",
+    "merged_models_with-flex_9": "large",
+    # copybara:comment_end
+}
+
 [gen_zip_test(
     name = "zip_test_%s%s" % (
         test_name,
         delegate_suffix(delegate),
     ),
-    size = "medium",
+    size = _test_size_override.get(test_name, "medium"),
     srcs = ["generated_examples_zip_test.cc"],
     args = args + select({
         "//tensorflow:android": [],
@@ -74,7 +82,6 @@ exports_files([
     )],
     # copybara:comment_end
     delegate = delegate,
-    shard_count = 30,
     tags = tags + [
         "gen_zip_test",
         "tflite_not_portable_intentional",
@@ -101,7 +108,7 @@ exports_files([
             "//tensorflow/core:portable_tensorflow_test_lib",
         ],
     }),
-) for conversion_mode, delegate, test_name, tags, args in generated_test_models_all() + merged_test_models()]
+) for conversion_mode, delegate, test_name, tags, args in generated_test_models_all()]
 
 test_suite(
     name = "generated_zip_tests",
@@ -125,7 +132,6 @@ py_library(
         "//tensorflow/lite/python:test_util",
         "//tensorflow/python:graph_util",
         "//third_party/py/numpy",
-        "@six_archive//:six",
     ],
 )
 
@@ -178,7 +184,6 @@ py_binary(
         ":zip_test_utils",
         "//tensorflow:tensorflow_py",
         "//third_party/py/numpy",
-        "@six_archive//:six",
     ],
 )
 
@@ -197,6 +202,7 @@ cc_library(
         ":split",
         ":test_runner",
         "//tensorflow/lite:framework",
+        "//tensorflow/lite/core:headers",
     ],
 )
 
@@ -262,6 +268,7 @@ cc_library(
         "@com_google_absl//absl/strings",
         "//tensorflow/lite/c:c_api_types",
         "//tensorflow/lite/c:common",
+        "//tensorflow/lite/core:headers",
         "//tensorflow/lite:builtin_op_data",
         "//tensorflow/lite:framework",
         "//tensorflow/lite:string_util",
@@ -373,7 +380,7 @@ cc_library(
     name = "tf_driver",
     srcs = ["tf_driver.cc"],
     hdrs = ["tf_driver.h"],
-    features = tf_features_nolayering_check_if_android_or_ios(),
+    features = tf_features_nolayering_check_if_ios(),
     deps = [
         ":join",
         ":split",
@@ -417,7 +424,7 @@ cc_library(
     name = "generate_testspec",
     srcs = ["generate_testspec.cc"],
     hdrs = ["generate_testspec.h"],
-    features = tf_features_nolayering_check_if_android_or_ios(),
+    features = tf_features_nolayering_check_if_ios(),
     deps = [
         ":join",
         ":split",
@@ -472,10 +479,10 @@ cc_library(
             "//tensorflow/core:lib",
         ],
         "//tensorflow:android": [
-            "//tensorflow/core:portable_tensorflow_lib",
+            "//tensorflow/core:portable_tensorflow_lib_lite",
         ],
         "//tensorflow:ios": [
-            "//tensorflow/core:portable_tensorflow_lib",
+            "//tensorflow/core:portable_tensorflow_lib_lite",
         ],
     }),
 )
@@ -496,7 +503,7 @@ cc_library(
 cc_library(
     name = "tflite_diff_flags",
     hdrs = ["tflite_diff_flags.h"],
-    features = tf_features_nolayering_check_if_android_or_ios(),
+    features = tf_features_nolayering_check_if_ios(),
     deps = [
         ":split",
         ":tflite_diff_util",
@@ -618,7 +625,6 @@ pybind_extension(
     ],
     hdrs = ["string_util.h"],
     features = ["-use_header_modules"],
-    module_name = "_pywrap_string_util",
     deps = [
         ":string_util_lib",
         "//tensorflow/lite/python/interpreter_wrapper:numpy",
@@ -632,6 +638,7 @@ tflite_portable_test_suite()
 
 tflite_custom_android_library(
     name = "customized_tflite_for_add_ops",
+    experimental = True,
     models = ["//tensorflow/lite:testdata/add.bin"],
     visibility = ["//visibility:public"],
 )

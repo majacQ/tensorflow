@@ -17,32 +17,22 @@ limitations under the License.
 #define TENSORFLOW_COMPILER_XLA_SERVICE_GPU_NCCL_UTILS_H_
 
 #include <memory>
+#include <utility>
+#include <vector>
 
 #include "absl/synchronization/mutex.h"
-#if GOOGLE_CUDA
-#include "third_party/nccl/nccl.h"
-#elif TENSORFLOW_USE_ROCM
-#include "rocm/include/rccl/rccl.h"
-#endif
 #include "tensorflow/compiler/xla/service/collective_ops_utils.h"
 #include "tensorflow/compiler/xla/service/gpu/gpu_executable_run_options.h"
+#include "tensorflow/compiler/xla/service/gpu/thunk.h"
 #include "tensorflow/compiler/xla/status.h"
 #include "tensorflow/compiler/xla/statusor.h"
 #include "tensorflow/compiler/xla/xla_data.pb.h"
 
-#if BEF_THUNKS
-#include "tfrt/gpu/gpu_types.h"  // from @tf_runtime
-#include "tfrt/host_context/async_value_ref.h"  // from @tf_runtime
-#endif  // BEF_THUNKS
-
+// Common place for all collective thunks to include nccl/rccl headers.
 #if TENSORFLOW_USE_ROCM
-// Local hipify of cuda symbols
-#define cudaError_t hipError_t
-#define cudaStream_t hipStream_t
-#define cudaGetErrorString hipGetErrorString
-#define cudaGetDevice hipGetDevice
-#define cudaSetDevice hipSetDevice
-#define cudaSuccess hipSuccess
+#include "rocm/include/rccl/rccl.h"
+#else
+#include "third_party/nccl/nccl.h"
 #endif
 
 namespace xla {
@@ -50,14 +40,12 @@ namespace gpu {
 
 ncclRedOp_t ToNcclReduction(ReductionKind kind);
 StatusOr<std::pair<ncclDataType_t, int>> ToNcclDataTypeAndCountMultiplier(
-    PrimitiveType element_type);
+    PrimitiveType element_type, Thunk::Kind reduction_op);
 
 bool IsGlobalNcclConfig();
 bool IsNcclLaunchModeParallel();
 
 Status ToStatus(ncclResult_t s, const char* file, int64_t line,
-                const char* expr);
-Status ToStatus(cudaError_t s, const char* file, int64_t line,
                 const char* expr);
 
 // Macros to return or warn on CUDA/NCCL errors.  (The same macro works for both
@@ -99,7 +87,12 @@ class Lockable {
   // RAII type that will release the exclusive lock when it is destroyed.
   using Lock = std::unique_ptr<T, std::function<void(T*)>>;
 
-  explicit Lockable(T value = T()) : value_(std::move(value)) {}
+  Lockable() = default;
+  explicit Lockable(T value) : value_(std::move(value)) {}
+  Lockable(const Lockable&) = delete;
+  Lockable(Lockable&&) = delete;
+  Lockable& operator=(const Lockable&) = delete;
+  Lockable& operator=(Lockable&&) = delete;
 
   Lock Acquire() {
     absl::MutexLock lock(&mutex_);
@@ -119,33 +112,16 @@ class Lockable {
   bool is_unlocked_ ABSL_GUARDED_BY(mutex_) = true;
 };
 
-TF_LIB_GTL_DEFINE_INT_TYPE(OpId, int64_t);
+TSL_LIB_GTL_DEFINE_INT_TYPE(OpId, int64_t);
 
 struct NcclComm : public Lockable<ncclComm_t> {
-  NcclComm() : Lockable(nullptr) {}
+  explicit NcclComm(ncclComm_t comm) : Lockable(comm) {}
 };
 
 StatusOr<NcclComm::Lock> AcquireNcclComm(
     RunId run_id, OpId op_id, std::vector<GlobalDeviceId> participants,
     size_t num_local_participants,
     const NcclUniqueIdCallback& unique_id_callback, int rank);
-
-#if BEF_THUNKS
-// This struct contains stateful resource(s) needed to execute collective
-// BefThunks.
-struct XcclContext {
-  struct CollectivePermuteSourceTarget {
-    absl::optional<int64_t> source_peer;
-    absl::optional<int64_t> target_peer;
-  };
-
-  explicit XcclContext(NcclComm::Lock comm) : comm(std::move(comm)) {}
-
-  NcclComm::Lock comm;
-  CollectivePermuteSourceTarget collective_permute_source_target;
-  tfrt::AsyncValueRef<tfrt::gpu::GpuCclHandle> ccl_handle;
-};
-#endif  // BEF_THUNKS
 
 }  // namespace gpu
 }  // namespace xla

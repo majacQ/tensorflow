@@ -41,7 +41,7 @@ class Dataset : public DatasetBase {
 
   std::unique_ptr<IteratorBase> MakeIteratorInternal(
       const string& prefix) const override {
-    return absl::make_unique<Iterator>(typename Iterator::Params{
+    return std::make_unique<Iterator>(typename Iterator::Params{
         this, strings::StrCat(prefix, "::SparseTensorSlice")});
   }
 
@@ -59,10 +59,10 @@ class Dataset : public DatasetBase {
   }
 
   Status InputDatasets(std::vector<const DatasetBase*>* inputs) const override {
-    return Status::OK();
+    return OkStatus();
   }
 
-  Status CheckExternalState() const override { return Status::OK(); }
+  Status CheckExternalState() const override { return OkStatus(); }
 
  protected:
   Status AsGraphDefInternal(SerializationContext* ctx,
@@ -83,7 +83,7 @@ class Dataset : public DatasetBase {
     TF_RETURN_IF_ERROR(
         b->AddDataset(this, {indices_node, value_node, dense_shape_node},
                       {{"Tvalues", val_dtype}}, output));
-    return Status::OK();
+    return OkStatus();
   }
 
  private:
@@ -107,7 +107,7 @@ class Dataset : public DatasetBase {
       mutex_lock l(mu_);
       if (i_ == num_elements_) {
         *end_of_sequence = true;
-        return Status::OK();
+        return OkStatus();
       }
 
       out_tensors->clear();
@@ -158,7 +158,7 @@ class Dataset : public DatasetBase {
 
       ++i_;
       *end_of_sequence = false;
-      return Status::OK();
+      return OkStatus();
     }
 
    protected:
@@ -181,7 +181,7 @@ class Dataset : public DatasetBase {
         TF_RETURN_IF_ERROR(writer->WriteTensor(
             Iterator::full_name("next_values_"), next_values_));
       }
-      return Status::OK();
+      return OkStatus();
     }
 
     Status RestoreInternal(IteratorContext* ctx,
@@ -200,7 +200,7 @@ class Dataset : public DatasetBase {
         TF_RETURN_IF_ERROR(reader->ReadTensor(
             Iterator::full_name("next_values_"), &next_values_));
       }
-      return Status::OK();
+      return OkStatus();
     }
 
    private:
@@ -281,11 +281,12 @@ class SparseTensorSliceDatasetOp : public DatasetOpKernel {
       previous_batch_index = next_batch_index;
     }
     gtl::InlinedVector<int64_t, 8> std_order(dense_shape->NumElements(), 0);
+    TensorShape shape;
+    OP_REQUIRES_OK(ctx, TensorShape::BuildTensorShape(
+                            dense_shape->vec<int64_t>(), &shape));
     sparse::SparseTensor tensor;
-    OP_REQUIRES_OK(
-        ctx, sparse::SparseTensor::Create(
-                 *indices, *values, TensorShape(dense_shape->vec<int64_t>()),
-                 std_order, &tensor));
+    OP_REQUIRES_OK(ctx, sparse::SparseTensor::Create(*indices, *values, shape,
+                                                     std_order, &tensor));
     *output = new Dataset<T>(ctx, std::move(tensor));
   }
 

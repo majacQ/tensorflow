@@ -19,28 +19,22 @@ namespace xla {
 namespace gpu {
 
 bool IsCublasGemm(const HloInstruction& hlo) {
+  return IsLegacyCublasMatmul(hlo) || IsCublasLtMatmul(hlo);
+}
+
+bool IsLegacyCublasMatmul(const HloInstruction& hlo) {
   return hlo.opcode() == HloOpcode::kCustomCall &&
          hlo.custom_call_target() == kGemmCallTarget;
 }
 
-const char* const kCudnnBatchNormForwardInferenceCallTarget =
-    "__cudnn$batchNormalizationForwardInference";
-const char* const kCudnnBatchNormForwardTrainingCallTarget =
-    "__cudnn$batchNormalizationForwardTraining";
-const char* const kCudnnBatchNormBackwardCallTarget =
-    "__cudnn$batchNormalizationBackward";
-
-bool IsCustomCallToDnnBatchNorm(const HloInstruction& hlo) {
-  if (hlo.opcode() != HloOpcode::kCustomCall) {
-    return false;
-  }
-  const auto& target = hlo.custom_call_target();
-  return target == kCudnnBatchNormForwardInferenceCallTarget ||
-         target == kCudnnBatchNormForwardTrainingCallTarget ||
-         target == kCudnnBatchNormBackwardCallTarget;
+bool IsCublasLtMatmul(const HloInstruction& hlo) {
+  return hlo.opcode() == HloOpcode::kCustomCall &&
+         hlo.custom_call_target() == kCublasLtMatmulCallTarget;
 }
 
 const char* const kGemmCallTarget = "__cublas$gemm";
+const char* const kCublasLtMatmulCallTarget = "__cublas$lt$matmul";
+const char* const kTriangularSolveCallTarget = "__cublas$triangularSolve";
 const char* const kCudnnConvForwardCallTarget = "__cudnn$convForward";
 const char* const kCudnnConvBackwardInputCallTarget =
     "__cudnn$convBackwardInput";
@@ -78,7 +72,7 @@ StatusOr<CudnnConvKind> GetCudnnConvKind(
   return InternalError("Unexpected call target: %s", target);
 }
 
-string CudnnConvKindToString(CudnnConvKind kind) {
+std::string CudnnConvKindToString(CudnnConvKind kind) {
   switch (kind) {
     case CudnnConvKind::kForward:
       return "forward";

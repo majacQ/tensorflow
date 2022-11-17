@@ -12,9 +12,12 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
+#include <memory>
+#include <set>
 #include <string>
 #include <utility>
 
+#include "absl/base/attributes.h"
 #include "flatbuffers/flexbuffers.h"  // from @flatbuffers
 #include "mlir/Pass/Pass.h"  // from @llvm-project
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"  // from @llvm-project
@@ -25,7 +28,7 @@ limitations under the License.
 
 namespace mlir {
 namespace TF {
-namespace {
+namespace internal {
 
 // The name prefix of Flex ops.
 constexpr absl::string_view kFlexOpNamePrefix = "Flex";
@@ -66,58 +69,68 @@ bool IsAlwaysAllowlistedOp(Operation *op) {
       >(op);
 }
 
-// Checks if the operation is quantizable in the Legacy Integer mode.
-bool IsQuantizableOpInLegacyMode(Operation *op) {
-  return llvm::isa<
-      // clang-format off
-      // go/keep-sorted start
-      TF::AbsOp,
-      TF::AddOp,
-      TF::AddV2Op,
-      TF::ArgMaxOp,
-      TF::AvgPoolOp,
-      TF::BiasAddOp,
-      TF::BucketizeOp,
-      TF::ConcatV2Op,
-      TF::Conv2DBackpropInputOp,
-      TF::Conv2DOp,
-      TF::DepthwiseConv2dNativeOp,
-      TF::GatherV2Op,
-      TF::MatMulOp,
-      TF::MaxPoolOp,
-      TF::MaximumOp,
-      TF::MeanOp,
-      TF::MinimumOp,
-      TF::MulOp,
-      TF::PadOp,
-      TF::PadV2Op,
-      TF::Relu6Op,
-      TF::ReluOp,
-      TF::ReshapeOp,
-      TF::SoftmaxOp,
-      TF::SubOp,
-      TF::TransposeOp
-      // go/keep-sorted end
-      // clang-format on
-      >(op);
+// LINT.IfChange
+// The list of quantizable ops in the Legacy Integer mode.
+ABSL_ATTRIBUTE_NOINLINE const std::set<std::string>
+    &QuantizableOpsInLegacyMode() {
+  static const std::set<std::string> *legacy_op_list =
+      new std::set<std::string>({
+          // clang-format off
+          // go/keep-sorted start
+          TF::AbsOp::getOperationName().str(),
+          TF::AddOp::getOperationName().str(),
+          TF::AddV2Op::getOperationName().str(),
+          TF::ArgMaxOp::getOperationName().str(),
+          TF::AvgPoolOp::getOperationName().str(),
+          TF::BiasAddOp::getOperationName().str(),
+          TF::BucketizeOp::getOperationName().str(),
+          TF::ConcatV2Op::getOperationName().str(),
+          TF::Conv2DBackpropInputOp::getOperationName().str(),
+          TF::Conv2DOp::getOperationName().str(),
+          TF::DepthwiseConv2dNativeOp::getOperationName().str(),
+          TF::FusedBatchNormV3Op::getOperationName().str(),
+          TF::GatherV2Op::getOperationName().str(),
+          TF::MatMulOp::getOperationName().str(),
+          TF::MaxPoolOp::getOperationName().str(),
+          TF::MaximumOp::getOperationName().str(),
+          TF::MeanOp::getOperationName().str(),
+          TF::MinimumOp::getOperationName().str(),
+          TF::MulOp::getOperationName().str(),
+          TF::PadOp::getOperationName().str(),
+          TF::PadV2Op::getOperationName().str(),
+          TF::Relu6Op::getOperationName().str(),
+          TF::ReluOp::getOperationName().str(),
+          TF::ReshapeOp::getOperationName().str(),
+          TF::SoftmaxOp::getOperationName().str(),
+          TF::SubOp::getOperationName().str(),
+          TF::TransposeOp::getOperationName().str(),
+          // go/keep-sorted end
+          // clang-format on
+      });
+  return *legacy_op_list;
 }
 
-// Checks if the operation is quantizable in the Default mode.
-bool IsQuantizableOpInDefaultMode(Operation *op) {
-  return llvm::isa<
-      // clang-format off
-      // go/keep-sorted start
-      TF::BiasAddOp,
-      TF::Conv2DBackpropInputOp,
-      TF::Conv2DOp,
-      TF::DepthwiseConv2dNativeOp,
-      TF::MatMulOp,
-      TF::Relu6Op,
-      TF::ReluOp
-      // go/keep-sorted end
-      // clang-format on
-      >(op);
+// The list of quantizable ops in the Default mode.
+ABSL_ATTRIBUTE_NOINLINE const std::set<std::string>
+    &QuantizableOpsInDefaultMode() {
+  static const std::set<std::string> *default_op_list =
+      new std::set<std::string>({
+          // clang-format off
+          // go/keep-sorted start
+          TF::BiasAddOp::getOperationName().str(),
+          TF::Conv2DBackpropInputOp::getOperationName().str(),
+          TF::Conv2DOp::getOperationName().str(),
+          TF::DepthwiseConv2dNativeOp::getOperationName().str(),
+          TF::FusedBatchNormV3Op::getOperationName().str(),
+          TF::MatMulOp::getOperationName().str(),
+          TF::Relu6Op::getOperationName().str(),
+          TF::ReluOp::getOperationName().str(),
+          // go/keep-sorted end
+          // clang-format on
+      });
+  return *default_op_list;
 }
+// LINT.ThenChange(Google-internal path)
 
 // Checks if the operation can be fused with bias.
 inline bool IsFusibleWithBiasOp(Operation *op) {
@@ -137,7 +150,7 @@ inline bool IsFusibleWithBiasOp(Operation *op) {
 inline void CreateFlexOpCustomOptions(const std::string &op_name,
                                       const std::string &node_def_str,
                                       std::string &custom_option_buffer) {
-  auto flex_builder = absl::make_unique<flexbuffers::Builder>();
+  auto flex_builder = std::make_unique<flexbuffers::Builder>();
   flex_builder->Vector([&]() {
     flex_builder->String(op_name);
     flex_builder->String(node_def_str);
@@ -148,23 +161,21 @@ inline void CreateFlexOpCustomOptions(const std::string &op_name,
 }
 
 // Creates ElementsAttr for custom option.
-inline OpaqueElementsAttr CustomOptionForFlexOp(OpBuilder *builder,
-                                                const std::string &content) {
-  ShapedType type = RankedTensorType::get(
-      {static_cast<int64_t>(content.size())}, builder->getIntegerType(8));
-  return OpaqueElementsAttr::get(builder->getContext()->getLoadedDialect("tfl"),
-                                 type,
-                                 StringRef(content.data(), content.size()));
+inline TFL::ConstBytesAttr CustomOptionForFlexOp(OpBuilder *builder,
+                                                 const std::string &content) {
+  return TFL::ConstBytesAttr::get(builder->getContext(),
+                                  StringRef(content.data(), content.size()));
 }
 
 // Fallbacks ops that are not supported by TF Quantization to TFLite Flex ops.
-class FallbackToFlexOps : public PassWrapper<FallbackToFlexOps, FunctionPass> {
+class FallbackToFlexOps
+    : public PassWrapper<FallbackToFlexOps, OperationPass<func::FuncOp>> {
  public:
   FallbackToFlexOps() {}
   explicit FallbackToFlexOps(const std::string &mode) { mode_ = mode; }
   FallbackToFlexOps(const FallbackToFlexOps &other) { mode_ = other.mode_; }
 
-  void runOnFunction() override;
+  void runOnOperation() override;
 
   StringRef getArgument() const final { return "quant-raise-flex-fallback"; }
 
@@ -184,14 +195,15 @@ class FallbackToFlexOps : public PassWrapper<FallbackToFlexOps, FunctionPass> {
 
   // Checks if the operation is allowlisted in the current mode.
   bool IsAllowListedOp(Operation *op) {
+    std::string op_name = op->getName().getStringRef().str();
     if (IsAlwaysAllowlistedOp(op) || IsTfFakeQuantOp(op)) {
       return true;
     } else if (mode_ == kDefaultMode) {
-      return IsQuantizableOpInDefaultMode(op);
+      return QuantizableOpsInDefaultMode().count(op_name) > 0;
     } else if (mode_ == kLegacyIntegerMode) {
-      return IsQuantizableOpInLegacyMode(op);
+      return QuantizableOpsInLegacyMode().count(op_name) > 0;
     } else {
-      mlir::emitError(getFunction().getLoc(), "Unregconized mode: " + mode_);
+      mlir::emitError(getOperation().getLoc(), "Unregconized mode: " + mode_);
       signalPassFailure();
       return true;
     }
@@ -256,14 +268,14 @@ bool RankEquals(Value value, int rank) {
 
 #include "tensorflow/compiler/mlir/lite/quantization/tensorflow/fallback_to_flex_patterns.inc"
 
-void FallbackToFlexOps::runOnFunction() {
+void FallbackToFlexOps::runOnOperation() {
   if (mode_.empty()) return;
 
-  FuncOp func = getFunction();
+  func::FuncOp func = getOperation();
   MLIRContext *ctx = &getContext();
 
   // Convert binary ops to BiasAdd ops if possible.
-  OwningRewritePatternList patterns(ctx);
+  RewritePatternSet patterns(ctx);
   populateWithGenerated(patterns);
   (void)applyPatternsAndFoldGreedily(func, std::move(patterns));
 
@@ -279,15 +291,15 @@ void FallbackToFlexOps::runOnFunction() {
     if (!ConvertToFlexOp(op)) signalPassFailure();
   });
 }
-}  // namespace
+}  // namespace internal
 
-std::unique_ptr<OperationPass<FuncOp>> CreateFallbackToFlexOpsPass(
+std::unique_ptr<OperationPass<func::FuncOp>> CreateFallbackToFlexOpsPass(
     const std::string &mode) {
-  return std::make_unique<FallbackToFlexOps>(mode);
+  return std::make_unique<internal::FallbackToFlexOps>(mode);
 }
 
-static PassRegistration<FallbackToFlexOps> pass([] {
-  return CreateFallbackToFlexOpsPass(/*mode=*/kDefaultMode);
+static PassRegistration<internal::FallbackToFlexOps> pass([] {
+  return CreateFallbackToFlexOpsPass(/*mode=*/internal::kDefaultMode);
 });
 
 }  // namespace TF

@@ -17,7 +17,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import tensorflow.compat.v1 as tf
+import tensorflow as tf
 from tensorflow.lite.testing.zip_test_utils import create_tensor_data
 from tensorflow.lite.testing.zip_test_utils import make_zip_of_tests
 from tensorflow.lite.testing.zip_test_utils import register_make_test_function
@@ -28,23 +28,28 @@ def make_multinomial_tests(options):
   """Make a set of tests to do multinomial."""
   test_parameters = [{
       "logits_shape": [[1, 2], [2, 5]],
+      "dtype": [tf.int64, tf.int32],
       "seed": [None, 1234],
       "seed2": [5678],
   }, {
       "logits_shape": [[1, 2]],
+      "dtype": [tf.int64, tf.int32],
       "seed": [1234],
       "seed2": [None]
   }]
 
   def build_graph(parameters):
     """Build the op testing graph."""
-    tf.set_random_seed(seed=parameters["seed"])
+    tf.compat.v1.set_random_seed(seed=parameters["seed"])
     logits_tf = tf.compat.v1.placeholder(
         name="logits", dtype=tf.float32, shape=parameters["logits_shape"])
     num_samples_tf = tf.compat.v1.placeholder(
         name="num_samples", dtype=tf.int32, shape=None)
     out = tf.random.categorical(
-        logits=logits_tf, num_samples=num_samples_tf, seed=parameters["seed2"])
+        logits=logits_tf,
+        num_samples=num_samples_tf,
+        dtype=parameters["dtype"],
+        seed=parameters["seed2"])
     return [logits_tf, num_samples_tf], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
